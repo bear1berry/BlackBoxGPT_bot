@@ -67,7 +67,7 @@ class LLMClient:
             resp.raise_for_status()
         except httpx.HTTPError:
             logger.exception("LLM request failed")
-            raise
+            return "Сейчас я не смог получить ответ от модели. Попробуй ещё раз чуть позже."
 
         data = resp.json()
         try:
@@ -78,3 +78,19 @@ class LLMClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+# --- Глобальный синглтон LLM-клиента --- #
+
+_llm_client: LLMClient | None = None
+
+
+def get_llm_client() -> LLMClient:
+    """
+    Лениво создаёт и возвращает единый экземпляр LLMClient.
+    """
+    global _llm_client
+    if _llm_client is None:
+        settings = Settings()
+        _llm_client = LLMClient(settings)
+    return _llm_client
