@@ -1,61 +1,50 @@
 from __future__ import annotations
+import os
+from pathlib import Path
+from dotenv import load_dotenv
 
-from typing import List
+# Базовые пути
+BASE_DIR = Path(__file__).resolve().parent.parent
+ENV_PATH = BASE_DIR / ".env"
+DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True, parents=True)
 
-from pydantic import AnyHttpUrl, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+if ENV_PATH.exists():
+    load_dotenv(ENV_PATH)
 
+def _get_env(name: str, default: str | None = None, required: bool = False) -> str:
+    val = os.getenv(name, default)
+    if required and not val:
+        raise ValueError(f"CRITICAL: Env var '{name}' is missing!")
+    return val or ""
 
-class Settings(BaseSettings):
-    """
-    Application settings loaded from environment variables or .env file.
+# Bot
+BOT_TOKEN = _get_env("BOT_TOKEN", required=True)
+BOT_USERNAME = _get_env("BOT_USERNAME", "BlackBoxAI_Bot")
+ADMIN_IDS = [int(x) for x in _get_env("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 
-    Env vars (examples):
-        BOT_TOKEN=123:ABC
-        BOT_USERNAME=BlackBoxGPT_bot
-        DEEPSEEK_API_KEY=...
-        DEEPSEEK_MODEL=deepseek-chat
-        DEEPSEEK_BASE_URL=https://api.deepseek.com
-        DB_URL=sqlite+aiosqlite:///./aimedbot.db
-        ADMIN_IDS=123,456
-        LOG_LEVEL=INFO
-    """
+# LLM
+DEEPSEEK_API_KEY = _get_env("DEEPSEEK_API_KEY", required=True)
+DEEPSEEK_BASE_URL = _get_env("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+DEEPSEEK_API_URL = f"{DEEPSEEK_BASE_URL.rstrip('/')}/chat/completions"
+DEEPSEEK_MODEL = _get_env("DEEPSEEK_MODEL", "deepseek-chat")
 
-    bot_token: str
-    bot_username: str
+# Audio (Yandex)
+AUDIO_PROVIDER = _get_env("AUDIO_PROVIDER", "yandex")
+YANDEX_SPEECHKIT_API_KEY = _get_env("YANDEX_SPEECHKIT_API_KEY", "")
+YANDEX_FOLDER_ID = _get_env("YANDEX_FOLDER_ID", "")
 
-    deepseek_api_key: str
-    deepseek_model: str = "deepseek-chat"
-    deepseek_base_url: AnyHttpUrl = "https://api.deepseek.com"
+# Crypto
+CRYPTO_PAY_API_URL = "https://pay.crypt.bot/api/"
+CRYPTO_PAY_API_TOKEN = _get_env("CRYPTO_PAY_API_TOKEN", "")
 
-    db_url: str | None = None
+# Limits
+PLAN_FREE_DAILY_LIMIT = int(_get_env("FREE_DAILY_LIMIT", "20"))
+PLAN_PREMIUM_DAILY_LIMIT = int(_get_env("PREMIUM_DAILY_LIMIT", "200"))
 
-    admin_ids: List[int] = []
-    log_level: str = "INFO"
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_prefix="",
-        extra="ignore",
-    )
-
-    @field_validator("admin_ids", mode="before")
-    @classmethod
-    def split_admin_ids(cls, v: object) -> list[int]:
-        if isinstance(v, str):
-            v = v.strip()
-            if not v:
-                return []
-            parts = [p for p in v.replace(" ", "").split(",") if p]
-            return [int(p) for p in parts]
-        return v or []
-
-    @field_validator("db_url", mode="before")
-    @classmethod
-    def default_db_url(cls, v: object) -> str:
-        if v is None or (isinstance(v, str) and not v.strip()):
-            return "sqlite+aiosqlite:///./aimedbot.db"
-        return str(v)
-
-
-settings = Settings()
+# Tariffs
+SUBSCRIPTION_TARIFFS = {
+    "month_1": {"code": "premium_1m", "title": "Premium · 1 мес", "months": 1, "price_usdt": "7.99"},
+    "month_3": {"code": "premium_3m", "title": "Premium · 3 мес", "months": 3, "price_usdt": "26.99"},
+    "month_12": {"code": "premium_12m", "title": "Premium · 12 мес", "months": 12, "price_usdt": "82.99"},
+}
