@@ -12,7 +12,6 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from bot.config import Settings
 from bot.routers import setup_routers
 from bot.middlewares import UsageLimitMiddleware
-from bot.services.llm import LLMClient
 
 
 def setup_logging(level: int = logging.INFO) -> None:
@@ -32,9 +31,6 @@ async def main() -> None:
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-
-    bot["settings"] = settings
-    bot["llm_client"] = LLMClient(settings)
 
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(setup_routers())
