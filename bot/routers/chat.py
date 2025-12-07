@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.db.models import User, UserProfile
 from bot.db.session import async_session_maker
 from bot.services.modes import get_mode
-from bot.services.llm import LLMClient
+from bot.services.llm import get_llm_client
 from bot.services.profiles import build_profile_summary
 from bot.services.subscriptions import get_user_tariff
 from bot.services.usage import register_request
@@ -26,9 +26,8 @@ def _estimate_tokens(text: str) -> int:
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_chat(message: Message) -> None:
-    bot = message.bot
     session_maker = async_session_maker
-    llm: LLMClient = bot["llm_client"]
+    llm = get_llm_client()
 
     tg = message.from_user
     assert tg is not None
