@@ -1,0 +1,15 @@
+[Unit]
+Description=BlackBox GPT — Universal AI Assistant (Telegram Bot)
+After=network.target
+
+[Service]
+Type=simple
+User=bear1berry
+WorkingDirectory=/home/bear1berry/BlackBoxGPT
+EnvironmentFile=/home/bear1berry/BlackBoxGPT/.env
+ExecStart=/home/bear1berry/BlackBoxGPT/venv/bin/python -m bot.main
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
