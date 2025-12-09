@@ -26,7 +26,6 @@ from services.llm import ask_llm
 
 router = Router(name="chat")
 
-# Все «сервисные» тексты, которые относятся к навигации, а не к диалогу
 MENU_TEXTS = {
     MAIN_BUTTON_MODES,
     MAIN_BUTTON_PROFILE,
@@ -45,7 +44,7 @@ async def handle_text_message(message: Message) -> None:
     if not message.text:
         return
 
-    # Если это нажатие кнопки меню — навигация разрулится в другом роутере
+    # Нажатия по кнопкам таскбара — навигация, не диалог
     if message.text in MENU_TEXTS:
         return
 
@@ -62,7 +61,6 @@ async def handle_text_message(message: Message) -> None:
         user = result.scalar_one_or_none()
 
         if user is None:
-            # Автосоздание юзера, если /start не вызывался
             user = await get_or_create_user(
                 session,
                 telegram_id=message.from_user.id,
@@ -90,7 +88,6 @@ async def handle_text_message(message: Message) -> None:
             session, user_id=user.id, limit=10
         )
 
-    # Запрос к LLM
     reply_text = await ask_llm(
         settings=settings,
         mode=user.current_mode,
@@ -98,7 +95,6 @@ async def handle_text_message(message: Message) -> None:
         history=history_pairs,
     )
 
-    # Логируем диалог
     session_factory = get_session_factory()
     async with session_factory() as session:
         await log_message(
@@ -114,5 +110,4 @@ async def handle_text_message(message: Message) -> None:
             content=reply_text,
         )
 
-    # После ответа возвращаем главный таскбар
     await message.answer(reply_text, reply_markup=main_menu_kb())
