@@ -1,82 +1,101 @@
-from __future__ import annotations
-
+# bot/keyboards.py
 from aiogram.types import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    KeyboardButton,
     ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
 )
 
 
-def main_menu_kb() -> ReplyKeyboardMarkup:
-    keyboard = [
-        [
-            KeyboardButton(text="🧠 Режимы"),
-            KeyboardButton(text="👤 Профиль"),
-        ],
-        [
-            KeyboardButton(text="💎 Подписка"),
-            KeyboardButton(text="👥 Рефералы"),
-        ],
-    ]
+def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=keyboard,
+        keyboard=[
+            [
+                KeyboardButton(text="🧠 Режимы"),
+                KeyboardButton(text="👤 Профиль"),
+            ],
+            [
+                KeyboardButton(text="💎 Подписка"),
+                KeyboardButton(text="👥 Рефералы"),
+            ],
+        ],
         resize_keyboard=True,
-        input_field_placeholder="Напиши свой запрос...",
+        input_field_placeholder="Напиши запрос…",
     )
 
 
-def modes_menu_kb() -> ReplyKeyboardMarkup:
-    keyboard = [
-        [
-            KeyboardButton(text="🧠 Универсальный"),
-            KeyboardButton(text="🩺 Медицина"),
-        ],
-        [
-            KeyboardButton(text="🔥 Наставник"),
-            KeyboardButton(text="💼 Бизнес"),
-        ],
-        [
-            KeyboardButton(text="🎨 Креатив"),
-            KeyboardButton(text="⬅️ Назад"),
-        ],
-    ]
+def modes_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=keyboard,
+        keyboard=[
+            [
+                KeyboardButton(text="🧠 Универсальный"),
+                KeyboardButton(text="🩺 Медицина"),
+            ],
+            [
+                KeyboardButton(text="🔥 Наставник"),
+                KeyboardButton(text="💼 Бизнес"),
+            ],
+            [
+                KeyboardButton(text="🎨 Креатив"),
+            ],
+            [
+                KeyboardButton(text="⬅️ Назад в меню"),
+            ],
+        ],
         resize_keyboard=True,
-        input_field_placeholder="Выбери режим или вернись назад",
+        input_field_placeholder="Выбери режим…",
     )
 
 
-def subscription_menu_kb() -> ReplyKeyboardMarkup:
-    keyboard = [
-        [KeyboardButton(text="💎 1 месяц — $7.99")],
-        [KeyboardButton(text="💎 3 месяца — $25.99")],
-        [KeyboardButton(text="💎 12 месяцев — $89.99")],
-        [KeyboardButton(text="⬅️ Назад")],
-    ]
+def subscription_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=keyboard,
+        keyboard=[
+            [
+                KeyboardButton(text="💎 1 месяц — 7.99$"),
+            ],
+            [
+                KeyboardButton(text="💎 3 месяца — 25.99$"),
+            ],
+            [
+                KeyboardButton(text="💎 12 месяцев — 89.99$"),
+            ],
+            [
+                KeyboardButton(text="⬅️ Назад в меню"),
+            ],
+        ],
         resize_keyboard=True,
-        input_field_placeholder="Выбери подходящий план или вернись назад",
+        input_field_placeholder="Выбери план…",
     )
 
 
-def back_to_main_kb() -> ReplyKeyboardMarkup:
-    return main_menu_kb()
+def referral_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="📎 Моя реферальная ссылка"),
+            ],
+            [
+                KeyboardButton(text="⬅️ Назад в меню"),
+            ],
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Реферальная программа",
+    )
 
 
-def referral_link_inline_kb(ref_link: str) -> InlineKeyboardMarkup:
+def subscription_invoice_keyboard(invoice_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🔗 Открыть реферальную ссылку", url=ref_link)],
-        ]
-    )
-
-
-def payment_inline_kb(pay_url: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="💎 Оплатить через Crypto Bot", url=pay_url)],
+            [
+                InlineKeyboardButton(
+                    text="💸 Оплатить подписку", url=invoice_url
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔄 Проверить оплату",
+                    callback_data="sub_check_payment",
+                )
+            ],
         ]
     )
