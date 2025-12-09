@@ -1,51 +1,40 @@
-from __future__ import annotations
+from functools import lru_cache
+from typing import Optional
 
-from typing import List
-
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables."""
+    bot_token: str = Field(..., alias="BOT_TOKEN")
 
-    BOT_TOKEN: str
-    BOT_USERNAME: str
-    DEEPSEEK_API_KEY: str
+    deepseek_api_key: Optional[str] = Field(None, alias="DEEPSEEK_API_KEY")
+    deepseek_model: str = Field("deepseek-chat", alias="DEEPSEEK_MODEL")
 
-    # Comma-separated list of Telegram user IDs who can use admin commands
-    ADMIN_IDS: str = Field(default="")
+    perplexity_api_key: Optional[str] = Field(None, alias="PERPLEXITY_API_KEY")
+    perplexity_model: str = Field("sonar", alias="PERPLEXITY_MODEL")
 
-    # Default: SQLite DB in ./data directory
-    DB_URL: str = Field(default="sqlite+aiosqlite:///./data/bot.db")
+    llm_provider: str = Field("auto", alias="LLM_PROVIDER")
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
+    database_url: str = Field(
+        "sqlite+aiosqlite:///./blackboxgpt.db",
+        alias="DATABASE_URL",
     )
 
-    @field_validator("ADMIN_IDS", mode="before")
-    @classmethod
-    def _normalize_admin_ids(cls, v: str) -> str:
-        return v or ""
+    bot_name: str = Field("BlackBox GPT - Universal AI Assistant", alias="BOT_NAME")
+    bot_username: str = Field("BlackBoxGPT_bot", alias="BOT_USERNAME")
+    environment: str = Field("prod", alias="ENVIRONMENT")
 
-    @property
-    def admin_ids_list(self) -> List[int]:
-        if not self.ADMIN_IDS:
-            return []
-        result: List[int] = []
-        for part in self.ADMIN_IDS.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            try:
-                result.append(int(part))
-            except ValueError:
-                continue
-        return result
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        extra = "ignore"
 
     @property
     def bot_link(self) -> str:
-        # Username is stored without "@"
-        return f"https://t.me/{self.BOT_USERNAME}"
+        return f"https://t.me/{self.bot_username.lstrip('@')}"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

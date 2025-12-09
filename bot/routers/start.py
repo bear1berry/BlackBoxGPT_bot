@@ -4,7 +4,7 @@ from aiogram import Router
 from aiogram.filters import CommandStart
 from aiogram.types import Message
 
-from bot.config import Settings
+from bot.config import get_settings
 from bot.keyboards import main_menu_kb
 from bot.texts import build_welcome_text
 from db import get_session_factory, get_or_create_user
@@ -26,7 +26,7 @@ def _extract_ref_code(text: str | None) -> str | None:
 
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
-    settings = Settings()
+    settings = get_settings()
     ref_code = _extract_ref_code(message.text)
 
     session_factory = get_session_factory()
@@ -37,6 +37,7 @@ async def cmd_start(message: Message) -> None:
             username=message.from_user.username,
             first_name=message.from_user.first_name,
             last_name=message.from_user.last_name,
+            language_code=message.from_user.language_code,
             referred_by_code=ref_code,
         )
 

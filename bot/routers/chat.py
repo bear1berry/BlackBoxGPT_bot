@@ -4,7 +4,7 @@ from aiogram import Router
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
 
-from bot.config import Settings
+from bot.config import get_settings
 from bot.keyboards import (
     main_menu_kb,
     MAIN_BUTTON_MODES,
@@ -21,8 +21,9 @@ from db import (
     increment_daily_counter,
     log_message,
     User,
+    get_or_create_user,
 )
-from services.llm import ask_llm
+from bot.services.llm import ask_llm
 
 router = Router(name="chat")
 
@@ -44,16 +45,14 @@ async def handle_text_message(message: Message) -> None:
     if not message.text:
         return
 
-    # Нажатия по кнопкам таскбара — навигация, не диалог
     if message.text in MENU_TEXTS:
         return
 
-    settings = Settings()
+    settings = get_settings()
     session_factory = get_session_factory()
 
     async with session_factory() as session:
         from sqlalchemy import select
-        from db import get_or_create_user
 
         result = await session.execute(
             select(User).where(User.telegram_id == message.from_user.id)
@@ -67,10 +66,11 @@ async def handle_text_message(message: Message) -> None:
                 username=message.from_user.username,
                 first_name=message.from_user.first_name,
                 last_name=message.from_user.last_name,
+                language_code=message.from_user.language_code,
                 referred_by_code=None,
             )
 
-        allowed, used, limit = await increment_daily_counter(user)
+        allowed, used, limit = await increment_daily_counter(session, user)
         await session.commit()
 
         if not allowed:

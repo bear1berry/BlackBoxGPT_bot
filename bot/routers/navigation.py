@@ -3,7 +3,7 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.types import Message
 
-from bot.config import Settings
+from bot.config import get_settings
 from bot.keyboards import (
     main_menu_kb,
     modes_menu_kb,
@@ -30,12 +30,8 @@ from db import (
 router = Router(name="navigation")
 
 
-# --- 1-й уровень таскбара ---
-
-
 @router.message(F.text == MAIN_BUTTON_MODES)
 async def nav_modes(message: Message) -> None:
-    """Переход в выбор режимов (2-й уровень таскбара)."""
     session_factory = get_session_factory()
 
     async with session_factory() as session:
@@ -58,7 +54,7 @@ async def nav_modes(message: Message) -> None:
 
 @router.message(F.text == MAIN_BUTTON_PROFILE)
 async def nav_profile(message: Message) -> None:
-    settings = Settings()
+    settings = get_settings()
     session_factory = get_session_factory()
 
     async with session_factory() as session:
@@ -100,7 +96,7 @@ async def nav_subscription(message: Message) -> None:
 
 @router.message(F.text == MAIN_BUTTON_REFERRALS)
 async def nav_referrals(message: Message) -> None:
-    settings = Settings()
+    settings = get_settings()
     session_factory = get_session_factory()
 
     async with session_factory() as session:
@@ -123,23 +119,15 @@ async def nav_referrals(message: Message) -> None:
     await message.answer(text, reply_markup=main_menu_kb())
 
 
-# --- Кнопка «Назад» ---
-
-
 @router.message(F.text == BACK_BUTTON_TEXT)
 async def nav_back_to_main(message: Message) -> None:
-    """Вернуться на главный экран (онбординг + главный таскбар)."""
-    settings = Settings()
+    settings = get_settings()
     text = build_welcome_text(settings)
     await message.answer(text, reply_markup=main_menu_kb())
 
 
-# --- Выбор режима (2-й уровень) ---
-
-
 @router.message(F.text.in_(MODE_BUTTON_TEXTS_WITH_CHECK))
 async def choose_mode(message: Message) -> None:
-    """Переключение режима через кнопки в таскбаре 2-го уровня."""
     raw = message.text.replace("✅", "").strip()
 
     mode_key = None

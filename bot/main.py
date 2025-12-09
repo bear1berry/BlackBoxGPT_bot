@@ -1,49 +1,42 @@
-from __future__ import annotations
-
 import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 
-from bot.config import Settings
-from bot.routers import admin, chat, navigation, start
-from db import create_all, init_engine
+from bot.config import get_settings
+from bot.routers import setup_routers
+from db import init_db
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
+logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    settings = get_settings()
+    logger.info("Starting BlackBox GPT bot...")
 
-    settings = Settings()
+    await init_db()
 
-    # Init DB
-    await init_engine(settings.DB_URL)
-    await create_all()
-
-    # Init bot
     bot = Bot(
-        token=settings.BOT_TOKEN,
+        token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()
 
-    # Routers
-    dp.include_router(start.router)
-    dp.include_router(navigation.router)
-    dp.include_router(admin.router)
-    dp.include_router(chat.router)
+    dp.include_router(setup_routers())
 
-    logging.info("Starting polling as @%s", settings.BOT_USERNAME)
-
-    await dp.start_polling(
-        bot,
-        allowed_updates=dp.resolve_used_update_types(),
-    )
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot stopped")
