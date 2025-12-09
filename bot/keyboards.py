@@ -19,7 +19,7 @@ MODE_LABELS = {
 
 BACK_BUTTON_TEXT = "⬅️ Назад"
 
-# Тексты кнопок режимов (без/с галочкой) — пригодятся в роутерах
+# Тексты кнопок режимов (без/с галочкой)
 MODE_BUTTON_TEXTS = list(MODE_LABELS.values())
 MODE_BUTTON_TEXTS_WITH_CHECK = MODE_BUTTON_TEXTS + [
     f"✅ {label}" for label in MODE_LABELS.values()
