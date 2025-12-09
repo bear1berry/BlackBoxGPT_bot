@@ -72,7 +72,6 @@ class LlmService:
         if backend is not None:
             return backend
 
-        # Например, Наставник — в DeepSeek, остальное — в Perplexity
         if mode in {"mentor"}:
             return "deepseek"
 
@@ -116,7 +115,6 @@ class LlmService:
             "stream": True,
         }
 
-        # Примерно даём движку возможность ходить в веб
         if use_web:
             payload["search_domain_filter"] = ["perplexity.ai"]
 
@@ -223,10 +221,8 @@ class LlmService:
                 ):
                     yield chunk
         except asyncio.TimeoutError:
-            # Временная ошибка / таймаут
             yield TEMP_ERROR_MESSAGE
         except Exception:
-            # Любая другая ошибка
             yield FATAL_ERROR_MESSAGE
 
     async def ask(
