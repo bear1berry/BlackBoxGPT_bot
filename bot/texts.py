@@ -1,3 +1,6 @@
+cd ~/BlackBoxGPT_bot
+
+cat > bot/texts.py << 'EOF'
 from __future__ import annotations
 
 from datetime import datetime
@@ -31,9 +34,6 @@ def _format_subscription(
     return "Статус: Free\nРасширенные возможности доступны в Premium."
 
 
-# ---------- ОНБОРДИНГ ----------
-
-
 def build_onboarding_text(name: Optional[str]) -> str:
     name = name or "друг"
     return (
@@ -42,9 +42,6 @@ def build_onboarding_text(name: Optional[str]) -> str:
         "Внизу экрана — меню с режимами и разделами.\n"
         "Можешь сразу написать свой первый запрос."
     )
-
-
-# ---------- ГЛАВНЫЙ ЭКРАН ----------
 
 
 def build_main_menu_text(current_mode: Optional[str]) -> str:
@@ -71,9 +68,6 @@ def build_modes_text() -> str:
         "Креатив — концепты, истории, контент.\n\n"
         "Выбери режим в меню ниже."
     )
-
-
-# ---------- ПРОФИЛЬ ----------
 
 
 def build_profile_text(
@@ -104,9 +98,6 @@ def build_profile_text(
     )
 
 
-# ---------- ПОДПИСКА ----------
-
-
 def build_subscription_text(
     subscription_tier: Optional[str],
     subscription_expires_at: Optional[datetime],
@@ -124,9 +115,6 @@ def build_subscription_text(
     )
 
 
-# ---------- РЕФЕРАЛЫ ----------
-
-
 def build_referrals_text(ref_link: str, referrals_count: int) -> str:
     return (
         "Реферальная программа\n\n"
@@ -136,3 +124,4 @@ def build_referrals_text(ref_link: str, referrals_count: int) -> str:
         f"{ref_link}\n\n"
         "Кнопка ниже откроет ссылку сразу в Telegram."
     )
+EOF
