@@ -153,12 +153,14 @@ async def _set_mode(message: Message, mode: str) -> None:
         return
 
     text = build_main_menu_text(user.current_mode)
-    await message.answer(
-        f"✅ Режим обновлён: {mode.capitalize()}.
-
-{text}",
-        reply_markup=main_menu_kb(),
-    )
+           await message.answer(
+            (
+                f"✅ Режим обновлён: {mode.capitalize()}.\n\n"
+                "Теперь просто напиши свой запрос — "
+                "я буду отвечать уже в этом режиме."
+            ),
+            reply_markup=main_menu_keyboard(),
+        )
 
 
 @router.message(F.text == "⬅️ Назад")
