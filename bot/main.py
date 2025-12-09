@@ -1,22 +1,17 @@
-from __future__ import annotations
-
+# bot/main.py
 import asyncio
 import logging
-import sys
 
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
+from aiogram.enums.parse_mode import ParseMode
 
-from bot.config import settings
-from bot.routers import chat_router, navigation_router, start_router
-from db.session import init_db
-
+from .config import settings
+from .db import init_db
+from .routers import start_router, navigation_router, chat_router
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
 
@@ -26,10 +21,7 @@ async def main() -> None:
 
     await init_db()
 
-    bot = Bot(
-        token=settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
+    bot = Bot(token=settings.BOT_TOKEN, parse_mode=ParseMode.HTML)
     dp = Dispatcher()
 
     dp.include_router(start_router)
