@@ -21,7 +21,7 @@ async def tts_to_file(text: str, out_dir: Path) -> Path:
 
     url = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
     headers = {
-        "Authorization": f"Bearer {settings.yandex_iam_token}",
+        "Authorization": f"Api-Key {settings.yandex_api_key}",
     }
     data = {
         "text": text,
