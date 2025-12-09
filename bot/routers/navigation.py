@@ -75,11 +75,11 @@ async def change_mode(message: Message) -> None:
         await session.commit()
 
         mode_title = MODE_TITLES.get(new_mode, "Универсальный")
-        await message.answer(
-            f"✅ Режим обновлён: <b>{mode_title}</b>.\n\n"
-            "Теперь просто напиши запрос — я уже думаю в новом режиме.",
-            reply_markup=main_menu_keyboard(),
-        )
+        await callback.message.edit_text(
+        f"✅ Режим обновлён: <b>{mode.capitalize()}</b>.\n\n"
+        "Можешь написать новый запрос ниже 👇",
+        reply_markup=build_main_menu_kb(),
+    )
 
 
 @router.message(F.text == "⬅️ Назад в меню")
