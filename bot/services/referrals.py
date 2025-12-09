@@ -3,9 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..config import settings
 from ..models import User, Referral
-from .crypto_utils import normalize_username  # если нужно, можно убрать
 
 
 def build_referral_link(bot_username: str, ref_code: str) -> str:
@@ -40,9 +38,6 @@ async def apply_referral(
     new_user: User,
     ref_code: str | None,
 ) -> None:
-    """
-    Привязка реферала при первом запуске.
-    """
     if not ref_code or new_user.referred_by_id is not None:
         return
 
@@ -53,7 +48,6 @@ async def apply_referral(
     if referrer is None or referrer.id == new_user.id:
         return
 
-    # Записываем связь + бонус можно начислять при оплате
     new_user.referred_by_id = referrer.id
     session.add(
         Referral(
