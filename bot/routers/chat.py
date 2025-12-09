@@ -5,7 +5,15 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
 
 from bot.config import Settings
-from bot.keyboards import main_menu_kb
+from bot.keyboards import (
+    main_menu_kb,
+    MAIN_BUTTON_MODES,
+    MAIN_BUTTON_PROFILE,
+    MAIN_BUTTON_SUBSCRIPTION,
+    MAIN_BUTTON_REFERRALS,
+    MODE_BUTTON_TEXTS_WITH_CHECK,
+    BACK_BUTTON_TEXT,
+)
 from bot.texts import LIMIT_REACHED_TEXT
 from db import (
     get_session_factory,
@@ -18,6 +26,16 @@ from services.llm import ask_llm
 
 router = Router(name="chat")
 
+# Все «сервисные» тексты, которые относятся к навигации, а не к диалогу
+MENU_TEXTS = {
+    MAIN_BUTTON_MODES,
+    MAIN_BUTTON_PROFILE,
+    MAIN_BUTTON_SUBSCRIPTION,
+    MAIN_BUTTON_REFERRALS,
+    BACK_BUTTON_TEXT,
+    *MODE_BUTTON_TEXTS_WITH_CHECK,
+}
+
 
 @router.message(
     ~CommandStart(),
@@ -25,6 +43,10 @@ router = Router(name="chat")
 )
 async def handle_text_message(message: Message) -> None:
     if not message.text:
+        return
+
+    # Если это нажатие кнопки меню — навигация разрулится в другом роутере
+    if message.text in MENU_TEXTS:
         return
 
     settings = Settings()
@@ -40,7 +62,7 @@ async def handle_text_message(message: Message) -> None:
         user = result.scalar_one_or_none()
 
         if user is None:
-            # Auto-create user if /start не вызывался
+            # Автосоздание юзера, если /start не вызывался
             user = await get_or_create_user(
                 session,
                 telegram_id=message.from_user.id,
@@ -68,7 +90,7 @@ async def handle_text_message(message: Message) -> None:
             session, user_id=user.id, limit=10
         )
 
-    # Call LLM outside of session context
+    # Запрос к LLM
     reply_text = await ask_llm(
         settings=settings,
         mode=user.current_mode,
@@ -76,6 +98,7 @@ async def handle_text_message(message: Message) -> None:
         history=history_pairs,
     )
 
+    # Логируем диалог
     session_factory = get_session_factory()
     async with session_factory() as session:
         await log_message(
@@ -91,4 +114,5 @@ async def handle_text_message(message: Message) -> None:
             content=reply_text,
         )
 
+    # После ответа возвращаем главный таскбар
     await message.answer(reply_text, reply_markup=main_menu_kb())
