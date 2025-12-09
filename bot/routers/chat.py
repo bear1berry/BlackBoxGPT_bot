@@ -1,103 +1,298 @@
-# bot/routers/chat.py
-from __future__ import annotations
-import io
+import asyncio
 import logging
+from typing import Literal, Dict, Optional
 
+import httpx
 from aiogram import Router, F
+from aiogram.enums import ChatAction, ChatType
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message
 
-from ..db import get_session
-from ..models import User
-from ..keyboards import main_menu_keyboard
-from ..texts import format_llm_answer
-from ..services.perplexity import ask_perplexity, ModeType
-from ..services.referrals import get_or_create_user
-from ..services.yandex_speech import recognize_speech, synthesize_speech
+from bot.config import settings
 
-router = Router(name="chat")
 logger = logging.getLogger(__name__)
 
+router = Router(name="chat-router")
 
-async def _ensure_user(message: Message) -> User:
-    async with (await get_session()) as session:
-        user = await get_or_create_user(session, message.from_user)
-        return user
+# ------------------------- Типы и режимы -------------------------
+
+Mode = Literal["universal", "medicine", "mentor", "business", "creative"]
+
+DEFAULT_MODE: Mode = "universal"
+
+# Если в settings есть кастомные модели – берём их, иначе дефолты.
+MODE_TO_PERPLEXITY_MODEL: Dict[Mode, str] = {
+    "universal": getattr(settings, "PERPLEXITY_MODEL_UNIVERSAL", "sonar-reasoning"),
+    "medicine": getattr(settings, "PERPLEXITY_MODEL_MEDICINE", "sonar-research"),
+    "mentor": getattr(settings, "PERPLEXITY_MODEL_MENTOR", "sonar-reasoning"),
+    "business": getattr(settings, "PERPLEXITY_MODEL_BUSINESS", "sonar-reasoning"),
+    "creative": getattr(settings, "PERPLEXITY_MODEL_CREATIVE", "sonar-reasoning"),
+}
+
+# На каком провайдере что гоняем (можешь перекинуть по вкусу)
+MODE_TO_PROVIDER: Dict[Mode, Literal["perplexity", "deepseek"]] = {
+    "universal": "perplexity",
+    "medicine": "perplexity",
+    "mentor": "perplexity",   # тут логично sonar-reasoning
+    "business": "deepseek",
+    "creative": "deepseek",
+}
+
+# ------------------------- Вспомогательные функции -------------------------
 
 
-@router.message(F.voice)
-async def handle_voice(message: Message) -> None:
+def detect_mode_for_user(message: Message) -> Mode:
     """
-    Обработка голосовых сообщений:
-    — скачиваем ogg/opus,
-    — отправляем в Yandex STT,
-    — обрабатываем запрос через Perplexity.
+    Пока что — простой вариант: берём дефолтный режим.
+    Здесь можно потом прикрутить:
+    - чтение режима из БД (users.current_mode)
+    - или из FSM/state
+    - или из какого-то middleware.
     """
-    bot = message.bot
-    user = await _ensure_user(message)
+    return DEFAULT_MODE
 
-    # скачиваем файл
-    file = await bot.get_file(message.voice.file_id)
-    buf = io.BytesIO()
-    await bot.download_file(file.file_path, destination=buf)
-    audio_bytes = buf.getvalue()
 
-    await message.answer("🎧 Распознаю голосовое сообщение…")
+def build_system_prompt(mode: Mode) -> str:
+    base = (
+        "Ты BlackBox GPT — универсальный умный ассистент. "
+        "Отвечай всегда по-русски. Не используй Markdown или HTML-разметку — "
+        "только обычный текст. Структурируй ответ как мини-статью: "
+        "короткое вступление, список ключевых моментов, вывод. "
+        "Пиши живо, но без воды, концентрированно и по делу.\n\n"
+    )
 
-    text = await recognize_speech(audio_bytes)
-    if not text:
-        await message.answer(
-            "😔 Не удалось распознать голос. Попробуй ещё раз — желательно говорить ближе к микрофону."
+    if mode == "medicine":
+        return (
+            base
+            + "Режим: Медицина. Помогай как опытный врач, но обязательно добавляй, "
+              "что твой ответ не заменяет консультацию лечащего врача. "
+              "Всегда уточняй недостающие данные, думай дифференциально."
         )
+    if mode == "mentor":
+        return (
+            base
+            + "Режим: Наставник. Ты ментор по жизни, продуктивности и мышлению. "
+              "Говори прямо, поддерживающе, давай конкретные шаги и рамки."
+        )
+    if mode == "business":
+        return (
+            base
+            + "Режим: Бизнес. Ты стратег, который помогает находить идеи, решения, "
+              "структурировать проекты и считать выгоду."
+        )
+    if mode == "creative":
+        return (
+            base
+            + "Режим: Креатив. Помогай с идеями, концептами, текстами, подачей. "
+              "Не скатывайся в шутовство, держи премиальный стиль."
+        )
+    # universal
+    return base + "Режим: Универсальный. Можешь помогать в любых темах."
+
+
+async def call_perplexity(prompt: str, mode: Mode) -> str:
+    if not getattr(settings, "PERPLEXITY_API_KEY", None):
+        raise RuntimeError("PERPLEXITY_API_KEY не задан в .env")
+
+    url = getattr(
+        settings,
+        "PERPLEXITY_API_URL",
+        "https://api.perplexity.ai/chat/completions",
+    )
+
+    model = MODE_TO_PERPLEXITY_MODEL.get(mode, MODE_TO_PERPLEXITY_MODEL[DEFAULT_MODE])
+    system_prompt = build_system_prompt(mode)
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.4,
+        "top_p": 0.9,
+        "max_tokens": 1024,
+        "stream": False,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {settings.PERPLEXITY_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    logger.info("Calling Perplexity: model=%s, mode=%s", model, mode)
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError):
+        logger.error("Unexpected Perplexity response: %s", data)
+        raise RuntimeError("Perplexity вернул неожиданный ответ")
+
+
+async def call_deepseek(prompt: str, mode: Mode) -> str:
+    if not getattr(settings, "DEEPSEEK_API_KEY", None):
+        raise RuntimeError("DEEPSEEK_API_KEY не задан в .env")
+
+    url = getattr(
+        settings,
+        "DEEPSEEK_API_URL",
+        "https://api.deepseek.com/chat/completions",
+    )
+
+    system_prompt = build_system_prompt(mode)
+
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.4,
+        "top_p": 0.9,
+        "max_tokens": 2048,
+        "stream": False,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    logger.info("Calling DeepSeek: model=deepseek-chat, mode=%s", mode)
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError):
+        logger.error("Unexpected DeepSeek response: %s", data)
+        raise RuntimeError("DeepSeek вернул неожиданный ответ")
+
+
+async def generate_answer(prompt: str, mode: Mode) -> str:
+    """
+    Центральная точка: решаем, какой провайдер дёргать, и возвращаем текст.
+    """
+    provider = MODE_TO_PROVIDER.get(mode, "perplexity")
+
+    if provider == "deepseek":
+        return await call_deepseek(prompt, mode)
+    else:
+        return await call_perplexity(prompt, mode)
+
+
+async def stream_edit_text(message: Message, full_text: str) -> None:
+    """
+    "Живой" стриминг: постепенно дописываем текст в одном сообщении.
+
+    Важно:
+    - Ответ без HTML/Markdown, чтобы не ломать разметку при обрезке.
+    - Редактируем не чаще, чем раз в ~0.25 сек, чтобы не упираться в лимиты.
+    """
+    full_text = full_text.strip()
+    if not full_text:
+        try:
+            await message.edit_text("Ответ пустой. Попробуй задать вопрос иначе.")
+        except TelegramBadRequest:
+            pass
         return
 
-    await message.answer(
-        f"🗣 Распознанный текст:\n<i>{text}</i>\n\nОбрабатываю запрос…"
+    words = full_text.split()
+    buffer = ""
+    last_edit = asyncio.get_event_loop().time()
+
+    for idx, word in enumerate(words, start=1):
+        if not buffer:
+            buffer = word
+        else:
+            buffer += " " + word
+
+        now = asyncio.get_event_loop().time()
+        # Обновляем сообщение примерно 3–4 раза в секунду
+        if now - last_edit >= 0.25 or idx == len(words):
+            try:
+                await message.edit_text(buffer)
+            except TelegramBadRequest as e:
+                # Например, "message is not modified" — просто игнорируем
+                logger.debug("edit_text error during streaming: %s", e)
+            last_edit = now
+
+    # На всякий случай финальное обновление
+    if buffer != full_text:
+        try:
+            await message.edit_text(full_text)
+        except TelegramBadRequest:
+            pass
+
+
+# ------------------------- Обработчик сообщений -------------------------
+
+
+@router.message(
+    F.chat.type == ChatType.PRIVATE,
+    F.text,
+    ~F.via_bot,
+)
+async def handle_user_message(message: Message) -> None:
+    """
+    Основной обработчик диалога:
+    - определяем режим (пока дефолт)
+    - показываем "печатает"
+    - создаём заготовку сообщения
+    - дёргаем LLM (Perplexity / DeepSeek)
+    - стримим ответ в одном сообщении.
+    """
+    user_input = (message.text or "").strip()
+    if not user_input:
+        return
+
+    mode: Mode = detect_mode_for_user(message)
+    logger.info(
+        "New user message: user_id=%s, mode=%s, text=%r",
+        message.from_user.id if message.from_user else None,
+        mode,
+        user_input[:200],
     )
 
-    mode: ModeType = user.current_mode if user.current_mode in (
-        "universal", "medicine", "mentor", "business", "creative"
-    ) else "universal"
-
-    system_prompt = (
-        "Ты — умный ассистент BlackBox GPT. Отвечай структурировано, как крутая статья: "
-        "заголовки, списки, чёткие шаги, минимум воды."
-    )
-    answer = await ask_perplexity(mode=mode, user_prompt=text, system_prompt=system_prompt)
-
-    answer = format_llm_answer(answer)
-
-    await bot.send_chat_action(message.chat.id, "typing")
-    await message.answer(answer, reply_markup=main_menu_keyboard())
-
-    # Если захочешь озвучивать ответ:
-    # audio = await synthesize_speech(answer)
-    # if audio:
-    #     await message.answer_voice(audio)
-
-
-@router.message(F.text & ~F.text.startswith("/"))
-async def handle_text(message: Message) -> None:
-    """
-    Любой текст, который не команда — это запрос к модели.
-    """
-    bot = message.bot
-    async with (await get_session()) as session:
-        user = await get_or_create_user(session, message.from_user)
-        mode: ModeType = (
-            user.current_mode
-            if user.current_mode in ("universal", "medicine", "mentor", "business", "creative")
-            else "universal"
+    # Показываем "печатает"
+    try:
+        await message.bot.send_chat_action(
+            chat_id=message.chat.id,
+            action=ChatAction.TYPING,
         )
+    except Exception as e:
+        logger.debug("Failed to send chat action: %s", e)
 
-    user_prompt = message.text
+    # Черновик ответа
+    try:
+        draft = await message.answer(
+            "🧠 Думаю над ответом...\n\n"
+            "Если вдруг будет задержка — я просто тщательно обрабатываю запрос.",
+        )
+    except TelegramBadRequest as e:
+        logger.error("Failed to send draft message: %s", e)
+        # В крайнем случае — просто сваливаемся
+        return
 
-    system_prompt = (
-        "Ты — умный ассистент BlackBox GPT. Отвечай структурировано, как крутая статья: "
-        "используй подзаголовки, списки, выделяй ключевые мысли, не лей воду и не уходи в лишнюю философию."
-    )
+    try:
+        raw_answer = await generate_answer(user_input, mode)
+    except Exception as e:
+        logger.exception("LLM error:")
+        try:
+            await draft.edit_text(
+                "⚠️ Произошла ошибка при обращении к модели.\n"
+                "Попробуй ещё раз чуть позже или переформулируй запрос."
+            )
+        except TelegramBadRequest:
+            pass
+        return
 
-    await bot.send_chat_action(message.chat.id, "typing")
-    answer = await ask_perplexity(mode=mode, user_prompt=user_prompt, system_prompt=system_prompt)
-    answer = format_llm_answer(answer)
-
-    await message.answer(answer, reply_markup=main_menu_keyboard())
+    await stream_edit_text(draft, raw_answer)
