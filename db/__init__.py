@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 from typing import Optional, List, Tuple
 
 from sqlalchemy import (
@@ -44,7 +45,7 @@ class User(Base):
         String(32), default="universal", server_default="universal"
     )
 
-    # Optional profile fields
+    # Optional profile fields (задел под расширение)
     profile_role: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     profile_goals: Mapped[Optional[str]] = mapped_column(Text(), nullable=True)
     profile_language: Mapped[str] = mapped_column(
@@ -89,11 +90,8 @@ async def init_engine(db_url: str) -> None:
     if _engine is not None:
         return
 
-    import os
-
     # Ensure directory for SQLite exists
     if db_url.startswith("sqlite"):
-        # crude path extraction
         path_part = db_url.split("///")[-1]
         dir_name = os.path.dirname(path_part)
         if dir_name and not os.path.exists(dir_name):
