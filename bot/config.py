@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal
-from typing import List, Optional
+from typing import Literal, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -9,177 +8,110 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     """
-    Централизованный конфиг для BlackBox GPT.
-
-    Все переменные берутся из .env. Название переменной = имя поля в UPPER_CASE:
-    - bot_token -> BOT_TOKEN
-    - database_url -> DATABASE_URL
-    - perplexity_api_base -> PERPLEXITY_API_BASE
-    и т.д.
+    Все настройки бота, читаются из .env и переменных окружения.
+    Любые лишние ключи в .env игнорируются (extra='ignore'),
+    чтобы не было ошибок вида 'Extra inputs are not permitted'.
     """
 
-    # Общая конфигурация pydantic-settings
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",  # не ругаемся на лишние переменные в .env
-    )
+    # Базовое
+    bot_token: str = Field(..., validation_alias="BOT_TOKEN")
+    bot_username: str = Field(..., validation_alias="BOT_USERNAME")
 
-    # ───────────────────────────
-    # Telegram / базовые настройки
-    # ───────────────────────────
-    bot_token: str = Field(..., description="Токен Telegram-бота (BOT_TOKEN)")
-    admin_ids: List[int] = Field(
-        default_factory=list,
-        description="Список ID админов, например: 123,456 (ADMIN_IDS)",
-    )
+    postgres_dsn: str = Field(..., validation_alias="POSTGRES_DSN")
 
-    # ───────────────────────────
-    # База данных
-    # ───────────────────────────
-    database_url: str = Field(
-        ...,
-        description="DSN для PostgreSQL, например: postgresql+asyncpg://user:pass@host:5432/dbname (DATABASE_URL)",
-    )
+    # LLM ключи
+    perplexity_api_key: str = Field(..., validation_alias="PERPLEXITY_API_KEY")
+    deepseek_api_key: str = Field(..., validation_alias="DEEPSEEK_API_KEY")
 
-    # ───────────────────────────
-    # Логирование и таймауты
-    # ───────────────────────────
-    log_level: str = Field(
-        default="INFO",
-        description="Уровень логов: DEBUG / INFO / WARNING / ERROR (LOG_LEVEL)",
-    )
-    llm_timeout_sec: int = Field(
-        default=120,
-        description="Таймаут запросов к LLM в секундах (LLM_TIMEOUT_SEC)",
-    )
-
-    # ───────────────────────────
-    # DeepSeek (LLM)
-    # ───────────────────────────
-    deepseek_api_key: str = Field(
-        ...,
-        description="API ключ DeepSeek (DEEPSEEK_API_KEY)",
-    )
-    deepseek_api_base: str = Field(
-        default="https://api.deepseek.com",
-        description="Базовый URL DeepSeek API (DEEPSEEK_API_BASE)",
-    )
-
-    # Базовые модели DeepSeek (можно перегрузить из .env при желании)
-    deepseek_default_model: str = Field(
-        default="deepseek-chat",
-        description="Модель по умолчанию для DeepSeek (DEEPSEEK_DEFAULT_MODEL)",
-    )
-    deepseek_reasoning_model: str = Field(
-        default="deepseek-reasoner",
-        description="Reasoning-модель для DeepSeek (DEEPSEEK_REASONING_MODEL)",
-    )
-
-    # ───────────────────────────
-    # Perplexity (LLM + web search)
-    # ───────────────────────────
-    perplexity_api_key: str = Field(
-        ...,
-        description="API ключ Perplexity (PERPLEXITY_API_KEY)",
-    )
+    # Базовый endpoint Perplexity (если нужен)
     perplexity_api_base: str = Field(
         default="https://api.perplexity.ai",
-        description="Базовый URL Perplexity API (PERPLEXITY_API_BASE)",
+        validation_alias="PERPLEXITY_API_BASE",
     )
 
-    # Модели Perplexity по режимам (можно переопределить в .env)
-    perplexity_universal_model: str = Field(
-        default="sonar",
-        description="Модель для универсального режима (PERPLEXITY_UNIVERSAL_MODEL)",
-    )
-    perplexity_mentor_model: str = Field(
+    # Модели по умолчанию Perplexity (разные по режимам)
+    perplexity_model_universal: str = Field(
         default="sonar-reasoning",
-        description="Модель для режима Наставник (PERPLEXITY_MENTOR_MODEL)",
+        validation_alias="PERPLEXITY_MODEL_UNIVERSAL",
     )
-    perplexity_medicine_model: str = Field(
-        default="sonar",
-        description="Модель для режима Медицина (PERPLEXITY_MEDICINE_MODEL)",
+    perplexity_model_medicine: str = Field(
+        default="sonar-reasoning",
+        validation_alias="PERPLEXITY_MODEL_MEDICINE",
     )
-    perplexity_business_model: str = Field(
-        default="sonar",
-        description="Модель для режима Бизнес (PERPLEXITY_BUSINESS_MODEL)",
+    perplexity_model_mentor: str = Field(
+        default="sonar-reasoning",
+        validation_alias="PERPLEXITY_MODEL_MENTOR",
     )
-    perplexity_creative_model: str = Field(
-        default="sonar",
-        description="Модель для режима Креатив (PERPLEXITY_CREATIVE_MODEL)",
+    perplexity_model_business: str = Field(
+        default="sonar-reasoning",
+        validation_alias="PERPLEXITY_MODEL_BUSINESS",
+    )
+    perplexity_model_creative: str = Field(
+        default="sonar-reasoning",
+        validation_alias="PERPLEXITY_MODEL_CREATIVE",
     )
 
-    # ───────────────────────────
-    # Яндекс: аудио (TTS/STT)
-    # ───────────────────────────
+    # DeepSeek (по режимам)
+    deepseek_model_universal: str = Field(
+        default="deepseek-chat",
+        validation_alias="DEEPSEEK_MODEL_UNIVERSAL",
+    )
+    deepseek_model_medicine: str = Field(
+        default="deepseek-chat",
+        validation_alias="DEEPSEEK_MODEL_MEDICINE",
+    )
+    deepseek_model_mentor: str = Field(
+        default="deepseek-chat",
+        validation_alias="DEEPSEEK_MODEL_MENTOR",
+    )
+    deepseek_model_business: str = Field(
+        default="deepseek-chat",
+        validation_alias="DEEPSEEK_MODEL_BUSINESS",
+    )
+    deepseek_model_creative: str = Field(
+        default="deepseek-chat",
+        validation_alias="DEEPSEEK_MODEL_CREATIVE",
+    )
+
+    # Настройки Crypto Bot (оплата подписки)
+    crypto_bot_token: str = Field(..., validation_alias="CRYPTO_BOT_TOKEN")
+    price_1m: float = Field(7.99, validation_alias="PRICE_1M")
+    price_3m: float = Field(25.99, validation_alias="PRICE_3M")
+    price_12m: float = Field(89.99, validation_alias="PRICE_12M")
+
+    # Yandex SpeechKit (аудио)
     yandex_iam_token: Optional[str] = Field(
         default=None,
-        description="IAM-токен Яндекса для SpeechKit (YANDEX_IAM_TOKEN)",
+        validation_alias="YANDEX_IAM_TOKEN",
     )
     yandex_folder_id: Optional[str] = Field(
         default=None,
-        description="ID каталога в Яндекс Cloud (YANDEX_FOLDER_ID)",
+        validation_alias="YANDEX_FOLDER_ID",
     )
     yandex_tts_voice: str = Field(
         default="filipp",
-        description="Голос TTS, например filipp, jane, oksana (YANDEX_TTS_VOICE)",
+        validation_alias="YANDEX_TTS_VOICE",
     )
     yandex_tts_lang: str = Field(
         default="ru-RU",
-        description="Язык TTS, например ru-RU (YANDEX_TTS_LANG)",
+        validation_alias="YANDEX_TTS_LANG",
     )
 
-    # ───────────────────────────
-    # Crypto Bot / Crypto Pay — подписки
-    # ───────────────────────────
-    crypto_pay_api_key: Optional[str] = Field(
-        default=None,
-        description="API ключ Crypto Pay (CRYPTO_PAY_API_KEY)",
+    # Логирование и таймауты
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
+        default="INFO",
+        validation_alias="LOG_LEVEL",
     )
-    crypto_pay_app_url: Optional[str] = Field(
-        default=None,
-        description="Ссылка на приложение / магазин в Crypto Bot (CRYPTO_PAY_APP_URL)",
-    )
-    crypto_pay_currency: str = Field(
-        default="USDT",
-        description="Валюта платежей: USDT / TON и т.п. (CRYPTO_PAY_CURRENCY)",
+    llm_timeout_sec: int = Field(
+        default=120,
+        validation_alias="LLM_TIMEOUT_SEC",
     )
 
-    # Стоимость подписок (в USD, но считать можешь как удобно)
-    price_1m: Decimal = Field(
-        default=Decimal("7.99"),
-        description="Цена подписки на 1 месяц (PRICE_1M)",
-    )
-    price_3m: Decimal = Field(
-        default=Decimal("25.99"),
-        description="Цена подписки на 3 месяца (PRICE_3M)",
-    )
-    price_12m: Decimal = Field(
-        default=Decimal("89.99"),
-        description="Цена подписки на 12 месяцев (PRICE_12M)",
-    )
-
-    # ───────────────────────────
-    # Подписки / рефералка / бонусы
-    # ───────────────────────────
-    free_trial_days: int = Field(
-        default=0,
-        description="Дни бесплатного пробного периода (FREE_TRIAL_DAYS)",
-    )
-    referral_bonus_days: int = Field(
-        default=3,
-        description="Сколько дней подписки даёт один реферал (REFERRAL_BONUS_DAYS)",
-    )
-
-    # ───────────────────────────
-    # Прочее
-    # ───────────────────────────
-    project_name: str = Field(
-        default="BlackBox GPT",
-        description="Имя проекта / бота (PROJECT_NAME)",
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
 
-# Глобальный объект настроек
 settings = Settings()
