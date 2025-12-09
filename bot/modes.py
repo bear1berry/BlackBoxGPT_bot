@@ -1,78 +1,89 @@
-from dataclasses import dataclass
-from typing import Dict
+# bot/models.py
+from datetime import datetime, timedelta, timezone
+import secrets
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    func,
+)
+from sqlalchemy.orm import declarative_base, relationship
+
+Base = declarative_base()
 
 
-@dataclass
-class ModeConfig:
-    key: str
-    title: str
-    description: str
-    system_prompt: str
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-MODES: Dict[str, ModeConfig] = {
-    "universal": ModeConfig(
-        key="universal",
-        title="🧠 Универсальный",
-        description=(
-            "Универсальный режим. Ты — умный, спокойный ассистент, который помогает "
-            "во всех темах: от быта и работы до идей для проектов."
-        ),
-        system_prompt=(
-            "Ты — универсальный ИИ-ассистент BlackBox GPT. Отвечай ясно, структурированно, "
-            "без лишней воды. Если вопрос не ясен — задавай уточняющие вопросы."
-        ),
-    ),
-    "medicine": ModeConfig(
-        key="medicine",
-        title="🩺 Медицина",
-        description=(
-            "Медицинский режим. Объясняешь, как работает организм, помогаешь "
-            "разобраться в анализах и показателях, но не ставишь диагнозы и не назначаешь лечение."
-        ),
-        system_prompt=(
-            "Ты — медицинский ассистент. Объясняй на понятном языке, что может означать "
-            "состояние пациента или результаты анализов. НЕ ставь диагнозы, НЕ назначай лечение, "
-            "всегда рекомендуй очную консультацию врача при серьёзных симптомах."
-        ),
-    ),
-    "mentor": ModeConfig(
-        key="mentor",
-        title="🔥 Наставник",
-        description=(
-            "Режим личностного роста. Жёсткий, но поддерживающий наставник, который "
-            "помогает выстроить режим, дисциплину и цели."
-        ),
-        system_prompt=(
-            "Ты — требовательный, но поддерживающий наставник. Помогаешь человеку "
-            "держать фокус, дисциплину, режим, цели. Говори честно, без лжи, но без токсичности. "
-            "Каждый ответ заканчивай маленьким конкретным шагом, который он может сделать сегодня."
-        ),
-    ),
-    "business": ModeConfig(
-        key="business",
-        title="💼 Бизнес",
-        description=(
-            "Режим идей и стратегий. Помогаешь с анализом рынка, гипотезами, продуктами и деньгами."
-        ),
-        system_prompt=(
-            "Ты — бизнес-ассистент и стратег. Помогаешь с идеями продуктов, анализом рынков, "
-            "поиском точек роста и денег. Держи баланс между креативом и реализмом, давай чёткие шаги."
-        ),
-    ),
-    "creative": ModeConfig(
-        key="creative",
-        title="🎨 Креатив",
-        description=(
-            "Режим идей, текстов и визуала. Помогаешь с креативом для постов, дизайна, историй."
-        ),
-        system_prompt=(
-            "Ты — креативный ассистент. Генерируй идеи для контента, визуала, текстов, "
-            "историй. Можешь быть смелее, но сохраняй вкус и чувство меры."
-        ),
-    ),
-}
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    tg_id = Column(BigInteger, unique=True, index=True, nullable=False)
+
+    username = Column(String(64), nullable=True)
+    first_name = Column(String(64), nullable=True)
+    last_name = Column(String(64), nullable=True)
+    language_code = Column(String(8), nullable=True)
+
+    current_mode = Column(String(32), default="universal", nullable=False)
+
+    is_premium = Column(Boolean, default=False, nullable=False)
+    premium_until = Column(DateTime(timezone=True), nullable=True)
+
+    ref_code = Column(String(32), unique=True, index=True, nullable=False)
+    referred_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=now_utc,
+        onupdate=now_utc,
+        nullable=False,
+    )
+
+    referrals = relationship(
+        "Referral", back_populates="referrer", foreign_keys="Referral.referrer_id"
+    )
+
+    def ensure_ref_code(self) -> None:
+        if not self.ref_code:
+            self.ref_code = secrets.token_urlsafe(8)
 
 
-def get_mode_config(key: str) -> ModeConfig:
-    return MODES.get(key, MODES["universal"])
+class Referral(Base):
+    __tablename__ = "referrals"
+
+    id = Column(Integer, primary_key=True)
+    referrer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    referral_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+
+    referrer = relationship("User", foreign_keys=[referrer_id])
+    referral_user = relationship("User", foreign_keys=[referral_user_id])
+
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    plan_code = Column(String(16), nullable=False)  # "1m", "3m", "12m"
+    invoice_id = Column(Integer, nullable=False)
+    status = Column(String(32), default="pending", nullable=False)
+
+    created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+
+    user = relationship("User")
+
+
+def calculate_expiry(months: int) -> datetime:
+    return now_utc() + timedelta(days=30 * months)
