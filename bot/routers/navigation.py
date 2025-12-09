@@ -153,7 +153,7 @@ async def _set_mode(message: Message, mode: str) -> None:
         return
 
     text = build_main_menu_text(user.current_mode)
-           await message.answer(
+                   await message.answer(
             (
                 f"✅ Режим обновлён: {mode.capitalize()}.\n\n"
                 "Теперь просто напиши свой запрос — "
