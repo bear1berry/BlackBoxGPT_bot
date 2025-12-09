@@ -1,7 +1,2 @@
-# package marker + версия
-__all__ = [
-    "config",
-    "db",
-    "keyboards",
-    "texts",
-]
+# bot/__init__.py
+__all__ = ["main"]
