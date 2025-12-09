@@ -1,212 +1,375 @@
-# bot/routers/navigation.py
 from __future__ import annotations
-import logging
+
+from typing import Optional
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
-from sqlalchemy import select
+from sqlalchemy import String, BigInteger, Boolean, DateTime, Text, select, func
+from sqlalchemy.orm import Mapped, mapped_column, DeclarativeBase
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-from ..db import get_session
-from ..keyboards import (
-    main_menu_keyboard,
-    modes_keyboard,
-    subscription_keyboard,
-    referral_keyboard,
-    subscription_invoice_keyboard,
-)
-from ..models import User
-from ..texts import (
-    build_main_menu_text,
-    build_profile_text,
-    build_subscription_text,
-    build_referrals_text,
-    MODE_TITLES,
-)
-from ..config import settings
-from ..services.referrals import build_referral_link, get_or_create_user
-from ..services.payments_crypto import create_invoice, check_invoice_and_activate
+from bot.config import settings
+from bot.texts import build_main_menu_text
+
 
 router = Router(name="navigation")
-logger = logging.getLogger(__name__)
 
 
-# ---------- Режимы ----------
+# --- DB setup (локальная лёгкая ORM-обёртка над существующей таблицей users) ---
 
 
-@router.message(F.text == "🧠 Режимы")
-async def show_modes(message: Message) -> None:
-    async with (await get_session()) as session:
-        user = await get_or_create_user(session, message.from_user)
+class Base(DeclarativeBase):
+    pass
 
-    await message.answer(
-        "🧠 <b>Режимы мышления</b>\n\n"
-        "Выбери, как я буду думать для тебя.\n"
-        "Режим можно менять в любой момент.",
-        reply_markup=modes_keyboard(),
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+
+    username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # текущий режим
+    mode: Mapped[str] = mapped_column(String(32), default="universal")
+
+    # премиум / подписка
+    is_premium: Mapped[bool] = mapped_column(Boolean, default=False)
+    premium_until: Mapped[Optional[DateTime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # рефералка
+    referral_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, unique=True)
+    referred_by: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
+    # текст «о себе»
+    about: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 
-@router.message(
-    F.text.in_(
-        [
-            "🧠 Универсальный",
-            "🩺 Медицина",
-            "🔥 Наставник",
-            "💼 Бизнес",
-            "🎨 Креатив",
+engine = create_async_engine(settings.database_url, echo=False, future=True)
+async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
+
+
+# --- Константы / хелперы ---
+
+
+MODE_LABELS = {
+    "universal": "🧠 Универсальный",
+    "medicine": "🩺 Медицина",
+    "mentor": "🔥 Наставник",
+    "business": "💼 Бизнес",
+    "creative": "🎨 Креатив",
+}
+
+
+def build_main_menu_kb() -> InlineKeyboardMarkup:
+    """
+    Нижний таскбар с 4 разделами.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🧠 Режимы", callback_data="nav:modes"),
+                InlineKeyboardButton(text="👤 Профиль", callback_data="nav:profile"),
+            ],
+            [
+                InlineKeyboardButton(text="💎 Подписка", callback_data="nav:subscription"),
+                InlineKeyboardButton(text="👥 Рефералы", callback_data="nav:referrals"),
+            ],
         ]
     )
-)
-async def change_mode(message: Message) -> None:
-    text = message.text or ""
-    mode_map = {
-        "🧠 Универсальный": "universal",
-        "🩺 Медицина": "medicine",
-        "🔥 Наставник": "mentor",
-        "💼 Бизнес": "business",
-        "🎨 Креатив": "creative",
-    }
-    new_mode = mode_map.get(text, "universal")
 
-    async with (await get_session()) as session:
-        user = await get_or_create_user(session, message.from_user)
-        user.current_mode = new_mode
+
+def build_modes_kb(current_mode: str) -> InlineKeyboardMarkup:
+    rows = []
+    for key, label in MODE_LABELS.items():
+        prefix = "✅ " if key == current_mode else ""
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{prefix}{label}",
+                    callback_data=f"mode:{key}",
+                )
+            ]
+        )
+
+    rows.append(
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:back_main")]
+    )
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_profile_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:back_main")]
+        ]
+    )
+
+
+def build_subscription_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💎 1 месяц — 7.99 $", callback_data="sub:1m"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="💎 3 месяца — 25.99 $", callback_data="sub:3m"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="💎 12 месяцев — 89.99 $", callback_data="sub:12m"
+                )
+            ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:back_main")],
+        ]
+    )
+
+
+def build_referrals_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:back_main")]
+        ]
+    )
+
+
+async def get_or_create_user(
+    session: AsyncSession,
+    tg_id: int,
+    username: str | None,
+    full_name: str | None,
+) -> User:
+    result = await session.execute(select(User).where(User.tg_id == tg_id))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        user = User(
+            tg_id=tg_id,
+            username=username,
+            full_name=full_name,
+            mode="universal",
+        )
+        session.add(user)
         await session.commit()
+        await session.refresh(user)
 
-        mode_title = MODE_TITLES.get(new_mode, "Универсальный")
+    return user
+
+
+# --- Handlers ---
+
+
+@router.callback_query(F.data == "nav:modes")
+async def open_modes(callback: CallbackQuery) -> None:
+    async with async_session_maker() as session:
+        tg = callback.from_user
+        full_name = " ".join(
+            part for part in [tg.first_name, tg.last_name] if part
+        ) or tg.full_name or tg.username or "Гость"
+
+        user = await get_or_create_user(
+            session=session,
+            tg_id=tg.id,
+            username=tg.username,
+            full_name=full_name,
+        )
+
+        # Текст со списком режимов
+        modes_lines = []
+        for key, label in MODE_LABELS.items():
+            prefix = "✅" if key == user.mode else "•"
+            modes_lines.append(f"{prefix} {label} — {key}")
+
+        text = (
+            "🧠 <b>Режимы работы BlackBox GPT</b>\n\n"
+            "Выбери, как я буду думать и отвечать для тебя прямо сейчас:\n\n"
+            + "\n".join(modes_lines)
+            + "\n\n"
+            "Нажми на режим ниже, чтобы мгновенно переключиться."
+        )
+
         await callback.message.edit_text(
-        f"✅ Режим обновлён: <b>{mode.capitalize()}</b>.\n\n"
-        "Можешь написать новый запрос ниже 👇",
-        reply_markup=build_main_menu_kb(),
-    )
+            text,
+            reply_markup=build_modes_kb(user.mode),
+        )
+        await callback.answer()
 
 
-@router.message(F.text == "⬅️ Назад в меню")
-async def back_to_menu(message: Message) -> None:
-    async with (await get_session()) as session:
-        user = await get_or_create_user(session, message.from_user)
-        text = build_main_menu_text(user)
-    await message.answer(text, reply_markup=main_menu_keyboard())
+@router.callback_query(F.data.startswith("mode:"))
+async def switch_mode(callback: CallbackQuery) -> None:
+    mode = callback.data.split(":", 1)[1]
+
+    if mode not in MODE_LABELS:
+        mode = "universal"
+
+    async with async_session_maker() as session:
+        tg = callback.from_user
+        full_name = " ".join(
+            part for part in [tg.first_name, tg.last_name] if part
+        ) or tg.full_name or tg.username or "Гость"
+
+        user = await get_or_create_user(
+            session=session,
+            tg_id=tg.id,
+            username=tg.username,
+            full_name=full_name,
+        )
+
+        user.mode = mode
+        await session.commit()
+        await session.refresh(user)
+
+        await callback.message.edit_text(
+            build_main_menu_text(user),
+            reply_markup=build_main_menu_kb(),
+        )
+        await callback.answer(
+            f"✅ Режим обновлён: {MODE_LABELS.get(mode, mode)}.",
+            show_alert=False,
+        )
 
 
-# ---------- Профиль ----------
+@router.callback_query(F.data == "nav:profile")
+async def open_profile(callback: CallbackQuery) -> None:
+    async with async_session_maker() as session:
+        tg = callback.from_user
+        full_name = " ".join(
+            part for part in [tg.first_name, tg.last_name] if part
+        ) or tg.full_name or tg.username or "Гость"
 
+        user = await get_or_create_user(
+            session=session,
+            tg_id=tg.id,
+            username=tg.username,
+            full_name=full_name,
+        )
 
-@router.message(F.text == "👤 Профиль")
-async def show_profile(message: Message) -> None:
-    async with (await get_session()) as session:
-        user = await get_or_create_user(session, message.from_user)
-
-        bot = message.bot
-        me = await bot.get_me()
-        referral_link = build_referral_link(me.username, user.ref_code)
-
-        text = build_profile_text(user, referral_link)
-
-    await message.answer_photo(
-        photo=message.from_user.photo.big_file_id if getattr(message.from_user, "photo", None) else None,
-        caption=text,
-        reply_markup=main_menu_keyboard(),
-    ) if False else await message.answer(
-        text,
-        reply_markup=main_menu_keyboard(),
-    )
-    # 👆 Фото через Telegram API с аватаркой пользователя достать напрямую нельзя.
-    # Поэтому пока оставляем текстовый профиль. Логика с "обезличенной аватаркой"
-    # может быть реализована через отправку своего стокового изображения.
-
-
-# ---------- Подписка ----------
-
-
-@router.message(F.text == "💎 Подписка")
-async def subscription_menu(message: Message) -> None:
-    text = build_subscription_text()
-    await message.answer(text, reply_markup=subscription_keyboard())
-
-
-@router.message(
-    F.text.in_(
-        [
-            "💎 1 месяц — 7.99$",
-            "💎 3 месяца — 25.99$",
-            "💎 12 месяцев — 89.99$",
-        ]
-    )
-)
-async def subscription_plan_selected(message: Message) -> None:
-    plan_map = {
-        "💎 1 месяц — 7.99$": "1m",
-        "💎 3 месяца — 25.99$": "3m",
-        "💎 12 месяцев — 89.99$": "12m",
-    }
-    plan = plan_map[message.text]
-
-    async with (await get_session()) as session:
-        user = await get_or_create_user(session, message.from_user)
-        try:
-            invoice_url, invoice_id = await create_invoice(session, user, plan)
-        except Exception as e:
-            logger.exception("Failed to create invoice")
-            await message.answer(
-                "❌ Не удалось создать ссылку на оплату. Попробуй позже.",
-                reply_markup=main_menu_keyboard(),
-            )
-            return
-
-    await message.answer(
-        "💳 <b>Ссылка на оплату готова</b>\n\n"
-        "Нажми кнопку ниже, оплати подписку и вернись в чат — "
-        "бот автоматически проверит статус и активирует Premium.",
-        reply_markup=subscription_invoice_keyboard(invoice_url),
-    )
-
-
-@router.callback_query(F.data == "sub_check_payment")
-async def callback_check_payment(callback: CallbackQuery) -> None:
-    await callback.answer("Проверяю оплату…", show_alert=False)
-
-    async with (await get_session()) as session:
-        user = await get_or_create_user(session, callback.from_user)
-        ok = await check_invoice_and_activate(session, user)
-
-        if ok:
-            text = (
-                "✅ <b>Оплата получена</b>\n\n"
-                "Premium-режим активирован. Теперь я работаю на полную мощность."
-            )
+        # Публичная t.me ссылка пользователя
+        if tg.username:
+            tme_link = f"https://t.me/{tg.username}"
         else:
-            text = (
-                "⏳ Оплата ещё не найдена.\n\n"
-                "Убедись, что перевод завершён, и попробуй через минуту."
-            )
+            tme_link = "—"
 
-    await callback.message.answer(text, reply_markup=main_menu_keyboard())
+        # Реферальная ссылка (если есть код)
+        if user.referral_code:
+            ref_link = f"https://t.me/{settings.bot_username}?start={user.referral_code}"
+        else:
+            ref_link = "Реферальный код появится после первого запуска из бота."
+
+        text_lines = [
+            "👤 <b>Твой профиль</b>\n",
+            f"🆔 <b>ID:</b> <code>{tg.id}</code>",
+            f"🙋‍♂️ <b>Имя:</b> {full_name}",
+            f"🔗 <b>t.me:</b> {tme_link}",
+            "",
+            f"🧠 <b>Текущий режим:</b> {MODE_LABELS.get(user.mode, user.mode)}",
+            f"💎 <b>Премиум:</b> {'активен' if user.is_premium else 'нет'}",
+            "",
+            "<b>Реферальная ссылка:</b>",
+            f"<code>{ref_link}</code>",
+        ]
+
+        if user.about:
+            text_lines.append("")
+            text_lines.append("📝 <b>О себе:</b>")
+            text_lines.append(user.about)
+
+        text = "\n".join(text_lines)
+
+        await callback.message.edit_text(
+            text,
+            reply_markup=build_profile_kb(),
+        )
+        await callback.answer()
 
 
-# ---------- Рефералы ----------
-
-
-@router.message(F.text == "👥 Рефералы")
-async def show_referrals(message: Message) -> None:
-    async with (await get_session()) as session:
-        user = await get_or_create_user(session, message.from_user)
-        me = await message.bot.get_me()
-        link = build_referral_link(me.username, user.ref_code)
-        text = build_referrals_text(link, settings.REF_BONUS_DAYS)
-
-    await message.answer(text, reply_markup=referral_keyboard())
-
-
-@router.message(F.text == "📎 Моя реферальная ссылка")
-async def send_ref_link(message: Message) -> None:
-    async with (await get_session()) as session:
-        user = await get_or_create_user(session, message.from_user)
-        me = await message.bot.get_me()
-        link = build_referral_link(me.username, user.ref_code)
-
-    await message.answer(
-        f"📎 <b>Твоя ссылка:</b>\n<code>{link}</code>",
-        reply_markup=referral_keyboard(),
+@router.callback_query(F.data == "nav:subscription")
+async def open_subscription(callback: CallbackQuery) -> None:
+    text = (
+        "💎 <b>Подписка BlackBox GPT Premium</b>\n\n"
+        "✅ Доступ к мощным моделям Perplexity + DeepSeek\n"
+        "✅ Приоритетная очередь и быстрый стриминг ответов\n"
+        "✅ Увеличенные лимиты и продвинутая память\n\n"
+        "Выбери срок подписки, оплата проходит через Crypto Bot в USDT.\n"
+        "После успешной оплаты подписка активируется автоматически."
     )
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=build_subscription_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "nav:referrals")
+async def open_referrals(callback: CallbackQuery) -> None:
+    async with async_session_maker() as session:
+        tg = callback.from_user
+        full_name = " ".join(
+            part for part in [tg.first_name, tg.last_name] if part
+        ) or tg.full_name or tg.username or "Гость"
+
+        user = await get_or_create_user(
+            session=session,
+            tg_id=tg.id,
+            username=tg.username,
+            full_name=full_name,
+        )
+
+        if not user.referral_code:
+            # простой детерминированный код на базе tg_id
+            user.referral_code = f"ref{tg.id}"
+            await session.commit()
+            await session.refresh(user)
+
+        ref_link = f"https://t.me/{settings.bot_username}?start={user.referral_code}"
+
+        text = (
+            "👥 <b>Реферальная программа</b>\n\n"
+            "Приглашай друзей в BlackBox GPT и получай бонусы.\n"
+            "За каждого оплаченного друга начисляются дополнительные дни Premium.\n\n"
+            "Твоя персональная ссылка:\n"
+            f"<code>{ref_link}</code>"
+        )
+
+        await callback.message.edit_text(
+            text,
+            reply_markup=build_referrals_kb(),
+        )
+        await callback.answer()
+
+
+@router.callback_query(F.data == "nav:back_main")
+async def back_to_main(callback: CallbackQuery) -> None:
+    async with async_session_maker() as session:
+        tg = callback.from_user
+        full_name = " ".join(
+            part for part in [tg.first_name, tg.last_name] if part
+        ) or tg.full_name or tg.username or "Гость"
+
+        user = await get_or_create_user(
+            session=session,
+            tg_id=tg.id,
+            username=tg.username,
+            full_name=full_name,
+        )
+
+        await callback.message.edit_text(
+            build_main_menu_text(user),
+            reply_markup=build_main_menu_kb(),
+        )
+        await callback.answer()
