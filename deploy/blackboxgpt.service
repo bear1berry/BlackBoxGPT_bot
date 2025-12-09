@@ -1,0 +1,15 @@
+[Unit]
+Description=BlackBox GPT Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ubuntu/BlackBoxGPT_bot
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/home/ubuntu/BlackBoxGPT_bot/venv/bin/python -m bot.main
+Restart=on-failure
+RestartSec=5
+User=ubuntu
+
+[Install]
+WantedBy=multi-user.target
