@@ -6,12 +6,12 @@ def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="\U0001f9e0 Режимы", callback_data="nav:modes"),
-                InlineKeyboardButton(text="\U0001f464 Профиль", callback_data="nav:profile"),
+                InlineKeyboardButton(text="🧠 Режимы", callback_data="nav:modes"),
+                InlineKeyboardButton(text="👤 Профиль", callback_data="nav:profile"),
             ],
             [
-                InlineKeyboardButton(text="\U0001f48e Подписка", callback_data="nav:subscription"),
-                InlineKeyboardButton(text="\U0001f465 Рефералы", callback_data="nav:referrals"),
+                InlineKeyboardButton(text="💎 Подписка", callback_data="nav:subscription"),
+                InlineKeyboardButton(text="👥 Рефералы", callback_data="nav:referrals"),
             ],
         ]
     )
@@ -19,11 +19,11 @@ def main_menu_kb() -> InlineKeyboardMarkup:
 
 def modes_kb(current_mode: str) -> InlineKeyboardMarkup:
     buttons = [
-        ("\U0001f9e0 Универсальный", "universal"),
-        ("\U0001fa7a Медицина", "medicine"),
-        ("\U0001f525 Наставник", "mentor"),
-        ("\U0001f4bc Бизнес", "business"),
-        ("\U0001f3a8 Креатив", "creative"),
+        ("🧠 Универсальный", "universal"),
+        ("🩺 Медицина", "medicine"),
+        ("🔥 Наставник", "mentor"),
+        ("💼 Бизнес", "business"),
+        ("🎨 Креатив", "creative"),
     ]
 
     rows = [
