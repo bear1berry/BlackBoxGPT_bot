@@ -17,16 +17,14 @@ from bot.texts import build_main_menu_text
 router = Router(name="navigation")
 
 
-# ===== Простое in-memory состояние пользователя =====
-
 @dataclass
 class UserState:
     tg_id: int
     username: Optional[str] = None
     full_name: Optional[str] = None
 
-    mode: str = "universal"        # текущий режим
-    is_premium: bool = False       # статус подписки
+    mode: str = "universal"
+    is_premium: bool = False
     referral_code: Optional[str] = None
     referred_by: Optional[str] = None
     about: Optional[str] = None
@@ -53,13 +51,10 @@ def get_or_create_user_state(cb_from) -> UserState:
         )
         _USERS[tg_id] = user
 
-    # обновляем базовые данные при каждом запросе
     user.username = cb_from.username
     user.full_name = _get_full_name(cb_from)
     return user
 
-
-# ===== Витрины текста и клавиатур =====
 
 MODE_LABELS = {
     "universal": "🧠 Универсальный",
@@ -71,9 +66,6 @@ MODE_LABELS = {
 
 
 def build_main_menu_kb() -> InlineKeyboardMarkup:
-    """
-    Главный таскбар с 4 разделами.
-    """
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -149,8 +141,6 @@ def build_referrals_kb() -> InlineKeyboardMarkup:
         ]
     )
 
-
-# ===== Handlers =====
 
 @router.callback_query(F.data == "nav:modes")
 async def open_modes(callback: CallbackQuery) -> None:
