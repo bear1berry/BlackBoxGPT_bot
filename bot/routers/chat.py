@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
 
@@ -27,6 +27,8 @@ from bot.services.llm import ask_llm
 
 router = Router(name="chat")
 
+# Все тексты, которые относятся к системному меню и НЕ должны
+# попадать в LLM-обработчик
 MENU_TEXTS = {
     MAIN_BUTTON_MODES,
     MAIN_BUTTON_PROFILE,
@@ -37,14 +39,17 @@ MENU_TEXTS = {
 }
 
 
+# === Общий обработчик обычных сообщений ============================
+# Важный момент: F.text & ~F.text.startswith("/") — это означает:
+#   "только сообщения с текстом, который НЕ начинается с '/'"
+# То есть любые команды (/start, /help, /что-угодно) сюда НЕ попадут.
 @router.message(
-    ~CommandStart(),
-    ~Command(commands=["set_tier"]),
+    F.text,                       # есть текст
+    ~F.text.startswith("/"),      # и он не начинается с "/"
 )
 async def handle_text_message(message: Message) -> None:
-    if not message.text:
-        return
-
+    # Игнорируем текст, который совпадает с пунктами меню — их
+    # обрабатывают другие роутеры (navigation / start).
     if message.text in MENU_TEXTS:
         return
 
@@ -60,6 +65,7 @@ async def handle_text_message(message: Message) -> None:
         user = result.scalar_one_or_none()
 
         if user is None:
+            # На всякий случай создаём профиль, если вдруг его не было
             user = await get_or_create_user(
                 session,
                 telegram_id=message.from_user.id,
@@ -70,6 +76,7 @@ async def handle_text_message(message: Message) -> None:
                 referred_by_code=None,
             )
 
+        # Лимиты на день
         allowed, used, limit = await increment_daily_counter(session, user)
         await session.commit()
 
@@ -84,10 +91,12 @@ async def handle_text_message(message: Message) -> None:
             )
             return
 
+        # История диалога
         history_pairs = await get_last_dialog_history(
             session, user_id=user.id, limit=10
         )
 
+    # Вызов LLM (DeepSeek / Perplexity, авто-выбор и fallback)
     reply_text = await ask_llm(
         settings=settings,
         mode=user.current_mode,
@@ -95,6 +104,7 @@ async def handle_text_message(message: Message) -> None:
         history=history_pairs,
     )
 
+    # Логируем диалог
     session_factory = get_session_factory()
     async with session_factory() as session:
         await log_message(
