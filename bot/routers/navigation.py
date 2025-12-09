@@ -4,11 +4,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict
 
 from aiogram import Router, F
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-)
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from bot.config import settings
 from bot.texts import build_main_menu_text
