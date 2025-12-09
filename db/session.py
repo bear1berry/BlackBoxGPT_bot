@@ -1,37 +1,28 @@
-from typing import Callable
+from __future__ import annotations
 
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
-from bot.config import get_settings
+from bot.config import settings
+from db.models import Base
 
-_engine = None
-_SessionFactory: sessionmaker | None = None
+engine = create_async_engine(
+    settings.database_url,
+    echo=False,
+    future=True,
+)
 
-
-def get_engine():
-    global _engine
-    if _engine is None:
-        settings = get_settings()
-        _engine = create_async_engine(settings.database_url, echo=False, future=True)
-    return _engine
-
-
-def get_session_factory() -> Callable[[], AsyncSession]:
-    global _SessionFactory
-    if _SessionFactory is None:
-        engine = get_engine()
-        _SessionFactory = sessionmaker(
-            engine,
-            expire_on_commit=False,
-            class_=AsyncSession,
-        )
-    return _SessionFactory
+async_session = async_sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
 
 
 async def init_db() -> None:
-    from .base import Base
-
-    engine = get_engine()
+    """Create database tables if they do not exist."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

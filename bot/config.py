@@ -1,40 +1,48 @@
-from functools import lru_cache
-from typing import Optional
+from __future__ import annotations
 
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
-from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    bot_token: str = Field(..., alias="BOT_TOKEN")
+    bot_token: str = Field(alias="BOT_TOKEN")
+    bot_username: str = Field(alias="BOT_USERNAME")
 
-    deepseek_api_key: Optional[str] = Field(None, alias="DEEPSEEK_API_KEY")
-    deepseek_model: str = Field("deepseek-chat", alias="DEEPSEEK_MODEL")
+    database_url: str = Field(alias="DATABASE_URL")
 
-    perplexity_api_key: Optional[str] = Field(None, alias="PERPLEXITY_API_KEY")
-    perplexity_model: str = Field("sonar", alias="PERPLEXITY_MODEL")
+    # LLM providers
+    llm_provider: str = Field(default="perplexity", alias="LLM_PROVIDER")
 
-    llm_provider: str = Field("auto", alias="LLM_PROVIDER")
+    perplexity_api_key: str | None = Field(default=None, alias="PERPLEXITY_API_KEY")
+    perplexity_model_universal: str = Field(default="sonar-pro", alias="PERPLEXITY_MODEL_UNIVERSAL")
+    perplexity_model_mentor: str = Field(default="sonar-reasoning", alias="PERPLEXITY_MODEL_MENTOR")
+    perplexity_model_medicine: str = Field(default="sonar-pro", alias="PERPLEXITY_MODEL_MEDICINE")
+    perplexity_model_business: str = Field(default="sonar-pro", alias="PERPLEXITY_MODEL_BUSINESS")
+    perplexity_model_creative: str = Field(default="sonar", alias="PERPLEXITY_MODEL_CREATIVE")
 
-    database_url: str = Field(
-        "sqlite+aiosqlite:///./blackboxgpt.db",
-        alias="DATABASE_URL",
+    deepseek_api_key: str | None = Field(default=None, alias="DEEPSEEK_API_KEY")
+    deepseek_model: str = Field(default="deepseek-chat", alias="DEEPSEEK_MODEL")
+
+    # Crypto Pay / Crypto Bot
+    cryptopay_api_token: str | None = Field(default=None, alias="CRYPTOPAY_API_TOKEN")
+    cryptopay_asset: str = Field(default="USDT", alias="CRYPTOPAY_ASSET")
+
+    subscription_price_1m: float = Field(default=7.99, alias="SUBSCRIPTION_PRICE_1M")
+    subscription_price_3m: float = Field(default=25.99, alias="SUBSCRIPTION_PRICE_3M")
+    subscription_price_12m: float = Field(default=89.99, alias="SUBSCRIPTION_PRICE_12M")
+
+    referral_reward_days: int = Field(default=7, alias="REFERRAL_REWARD_DAYS")
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
     )
-
-    bot_name: str = Field("BlackBox GPT - Universal AI Assistant", alias="BOT_NAME")
-    bot_username: str = Field("BlackBoxGPT_bot", alias="BOT_USERNAME")
-    environment: str = Field("prod", alias="ENVIRONMENT")
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
 
     @property
     def bot_link(self) -> str:
-        return f"https://t.me/{self.bot_username.lstrip('@')}"
+        username = self.bot_username.lstrip("@")
+        return f"https://t.me/{username}"
 
 
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()
+settings = Settings()

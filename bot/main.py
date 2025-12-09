@@ -1,25 +1,27 @@
+from __future__ import annotations
+
 import asyncio
 import logging
+import sys
 
 from aiogram import Bot, Dispatcher
-from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 
-from bot.config import get_settings
-from bot.routers import setup_routers
-from db import init_db
+from bot.config import settings
+from bot.routers import chat_router, navigation_router, start_router
+from db.session import init_db
 
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stdout,
 )
-
 logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
-    settings = get_settings()
     logger.info("Starting BlackBox GPT bot...")
 
     await init_db()
@@ -30,13 +32,12 @@ async def main() -> None:
     )
     dp = Dispatcher()
 
-    dp.include_router(setup_routers())
+    dp.include_router(start_router)
+    dp.include_router(navigation_router)
+    dp.include_router(chat_router)
 
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot stopped")
+    asyncio.run(main())

@@ -1,94 +1,71 @@
 from __future__ import annotations
 
-from typing import Iterable, Tuple, Literal
+import logging
+from typing import List
 
 import httpx
 
-from bot.config import Settings
-from bot.modes import get_mode_config
+from bot.config import settings
+from db.models import DialogMessage, User
 
-Backend = Literal["deepseek", "perplexity"]
-
-
-def _choose_backend(settings: Settings, mode: str) -> Backend:
-    strategy = (settings.llm_provider or "auto").lower()
-
-    if strategy in {"deepseek", "perplexity"}:
-        return strategy  # type: ignore[return-value]
-
-    if mode in {"universal", "business", "creative"} and settings.perplexity_api_key:
-        return "perplexity"
-    if settings.deepseek_api_key:
-        return "deepseek"
-    return "deepseek"
+logger = logging.getLogger(__name__)
 
 
-async def _call_deepseek(
-    settings: Settings,
-    mode: str,
-    user_message: str,
-    history: Iterable[Tuple[str, str]] | None,
+SYSTEM_PROMPT_BASE = (
+    "Ты — BlackBox GPT, универсальный русскоязычный ассистент."
+    " Отвечай кратко, но содержательно. "
+    "Оформляй ответ как мини-статью: сначала ёмкий заголовок (выдели его <b>жирным</b>), "
+    "затем структурируй текст на блоки с подзаголовками, списками и короткими абзацами. "
+    "Избегай воды. Если пользователь пишет на русском — отвечай по-русски."
+)
+
+
+def _mode_to_perplexity_model(mode: str | None) -> str:
+    mode = (mode or "universal").lower()
+    if mode == "mentor":
+        return settings.perplexity_model_mentor
+    if mode == "medicine":
+        return settings.perplexity_model_medicine
+    if mode == "business":
+        return settings.perplexity_model_business
+    if mode == "creative":
+        return settings.perplexity_model_creative
+    return settings.perplexity_model_universal
+
+
+def _build_messages(prompt: str, history: List[DialogMessage]) -> list[dict]:
+    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT_BASE}]
+    for msg in history:
+        if msg.role not in {"user", "assistant"}:
+            continue
+        messages.append({"role": msg.role, "content": msg.content})
+    messages.append({"role": "user", "content": prompt})
+    return messages
+
+
+async def _ask_perplexity(
+    user: User,
+    prompt: str,
+    history: List[DialogMessage],
 ) -> str:
-    mode_cfg = get_mode_config(mode)
-    messages = [{"role": "system", "content": mode_cfg.system_prompt}]
+    if not settings.perplexity_api_key:
+        raise RuntimeError("PERPLEXITY_API_KEY не задан")
 
-    if history:
-        for role, content in history:
-            messages.append({"role": role, "content": content})
-
-    messages.append({"role": "user", "content": user_message})
-
-    payload = {
-        "model": settings.deepseek_model,
-        "messages": messages,
-        "temperature": 0.7,
-        "stream": False,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {settings.deepseek_api_key}",
-        "Content-Type": "application/json",
-    }
-
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            "https://api.deepseek.com/chat/completions",
-            json=payload,
-            headers=headers,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-    return data["choices"][0]["message"]["content"].strip()
-
-
-async def _call_perplexity(
-    settings: Settings,
-    mode: str,
-    user_message: str,
-    history: Iterable[Tuple[str, str]] | None,
-) -> str:
-    mode_cfg = get_mode_config(mode)
-    messages = [{"role": "system", "content": mode_cfg.system_prompt}]
-
-    if history:
-        for role, content in history:
-            messages.append({"role": role, "content": content})
-
-    messages.append({"role": "user", "content": user_message})
-
-    payload = {
-        "model": settings.perplexity_model,
-        "messages": messages,
-        "temperature": 0.7,
-    }
+    model = _mode_to_perplexity_model(user.current_mode)
+    messages = _build_messages(prompt, history)
 
     headers = {
         "Authorization": f"Bearer {settings.perplexity_api_key}",
         "Content-Type": "application/json",
     }
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": 1200,
+        "temperature": 0.7,
+    }
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(
             "https://api.perplexity.ai/chat/completions",
             json=payload,
@@ -96,39 +73,72 @@ async def _call_perplexity(
         )
         resp.raise_for_status()
         data = resp.json()
+        try:
+            return data["choices"][0]["message"]["content"].strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Perplexity response parse error: %s", exc)
+            raise RuntimeError("Не удалось разобрать ответ Perplexity") from exc
 
-    content = data["choices"][0]["message"]["content"].strip()
-    if "</think>" in content:
-        content = content.split("</think>", 1)[-1].strip()
-    return content
+
+async def _ask_deepseek(
+    user: User,
+    prompt: str,
+    history: List[DialogMessage],
+) -> str:
+    if not settings.deepseek_api_key:
+        raise RuntimeError("DEEPSEEK_API_KEY не задан")
+
+    messages = _build_messages(prompt, history)
+    headers = {
+        "Authorization": f"Bearer {settings.deepseek_api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": settings.deepseek_model,
+        "messages": messages,
+        "max_tokens": 1200,
+        "temperature": 0.7,
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            "https://api.deepseek.com/chat/completions",
+            json=payload,
+            headers=headers,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        try:
+            return data["choices"][0]["message"]["content"].strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("DeepSeek response parse error: %s", exc)
+            raise RuntimeError("Не удалось разобрать ответ DeepSeek") from exc
 
 
 async def ask_llm(
-    settings: Settings,
-    mode: str,
-    user_message: str,
-    history: Iterable[Tuple[str, str]] | None = None,
+    user: User,
+    prompt: str,
+    history: List[DialogMessage],
 ) -> str:
-    backend = _choose_backend(settings, mode)
-
-    async def _try_backend(b: Backend) -> str:
-        if b == "deepseek":
-            if not settings.deepseek_api_key:
-                raise RuntimeError("DEEPSEEK_API_KEY is not set")
-            return await _call_deepseek(settings, mode, user_message, history)
-        if not settings.perplexity_api_key:
-            raise RuntimeError("PERPLEXITY_API_KEY is not set")
-        return await _call_perplexity(settings, mode, user_message, history)
+    provider = (settings.llm_provider or "perplexity").lower()
 
     try:
-        return await _try_backend(backend)
-    except Exception:
-        alt: Backend = "perplexity" if backend == "deepseek" else "deepseek"
-        try:
-            return await _try_backend(alt)
-        except Exception as exc:
-            return (
-                "⚠️ Не удалось получить ответ от LLM-сервисов. "
-                "Попробуй ещё раз чуть позже. "
-                f"(техническая ошибка: {type(exc).__name__})"
-            )
+        if provider == "perplexity":
+            return await _ask_perplexity(user, prompt, history)
+        if provider == "deepseek":
+            return await _ask_deepseek(user, prompt, history)
+
+        # auto
+        if settings.perplexity_api_key:
+            return await _ask_perplexity(user, prompt, history)
+        if settings.deepseek_api_key:
+            return await _ask_deepseek(user, prompt, history)
+
+        raise RuntimeError("Не настроен ни один LLM-провайдер")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("LLM error: %s", exc)
+        return (
+            "⚠️ <b>Временная ошибка модели</b>.
+"
+            "Попробуй ещё раз через минуту или проверь конфиг LLM на сервере."
+        )
