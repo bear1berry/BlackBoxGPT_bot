@@ -54,7 +54,9 @@ class User(Base):
     )
 
 
-engine = create_async_engine(settings.database_url, echo=False, future=True)
+# В реальной базе здесь должен быть твой PostgreSQL DSN.
+# Сейчас это in-memory SQLite, чтобы модуль был самодостаточным и не падал.
+engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False, future=True)
 async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
 
