@@ -140,7 +140,6 @@ async def nav_back_to_main(message: Message) -> None:
 @router.message(F.text.in_(MODE_BUTTON_TEXTS_WITH_CHECK))
 async def choose_mode(message: Message) -> None:
     """Переключение режима через кнопки в таскбаре 2-го уровня."""
-    # Убираем галочку, если есть
     raw = message.text.replace("✅", "").strip()
 
     mode_key = None
