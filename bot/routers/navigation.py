@@ -5,7 +5,12 @@ from aiogram.types import CallbackQuery
 
 from bot.config import Settings
 from bot.keyboards import main_menu_kb, modes_kb
-from bot.texts import PROFILE_TEMPLATE, SUBSCRIPTION_TEXT, REFERRALS_TEXT
+from bot.texts import (
+    PROFILE_TEMPLATE,
+    SUBSCRIPTION_TEXT,
+    REFERRALS_TEXT,
+    build_welcome_text,
+)
 from db import (
     get_session_factory,
     get_daily_limit,
@@ -110,8 +115,10 @@ async def nav_referrals(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "nav:back_to_main")
 async def nav_back_to_main(callback: CallbackQuery) -> None:
-    # Просто возвращаем нижнее меню, текст оставляем
-    await callback.message.edit_reply_markup(reply_markup=main_menu_kb())
+    """Вернуться на главный экран (онбординг + таскбар)."""
+    settings = Settings()
+    text = build_welcome_text(settings)
+    await callback.message.edit_text(text, reply_markup=main_menu_kb())
     await callback.answer()
 
 
