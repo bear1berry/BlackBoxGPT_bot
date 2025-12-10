@@ -1,1 +1,5 @@
-from .config import settings  # noqa: F401
+# bot/__init__.py
+"""
+BlackBox GPT — Telegram-бот.
+Пакет приложения.
+"""
