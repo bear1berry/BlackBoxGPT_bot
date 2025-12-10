@@ -13,7 +13,11 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 import httpx
 from dotenv import load_dotenv
 
-# Загружаем .env из корня проекта
+# =========================
+#   ЗАГРУЗКА НАСТРОЕК
+# =========================
+
+# .env ожидается в корне проекта: ~/BlackBoxGPT_bot/.env
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -22,11 +26,13 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is not set in environment/.env")
+    raise RuntimeError("BOT_TOKEN is not set in .env")
 if not DEEPSEEK_API_KEY:
-    raise RuntimeError("DEEPSEEK_API_KEY is not set in environment/.env")
+    raise RuntimeError("DEEPSEEK_API_KEY is not set in .env")
 
-# --- Клавиатуры ---
+# =========================
+#   КЛАВИАТУРЫ
+# =========================
 
 MAIN_MENU_KB = ReplyKeyboardMarkup(
     keyboard=[
@@ -58,11 +64,11 @@ MODE_SYSTEM_PROMPTS: Dict[str, str] = {
     "Медицина": (
         "Ты — ИИ-помощник врача. Ты НЕ ставишь диагнозов и НЕ назначаешь лечение. "
         "Ты помогаешь разбираться в исследованиях, симптомах и тактике обращения к врачу. "
-        "При любом серьёзном или остром состоянии обязательно рекомендуй очный приём."
+        "При любом серьёзном или остром состоянии обязательно рекомендовавешь очный приём."
     ),
     "Наставник": (
         "Ты — личный наставник по развитию личности, дисциплине и продуктивности. "
-        "Отвечай прямолинейно, без лишней мягкости, но поддерживающе."
+        "Отвечай прямолинейно, жёстко, но поддерживающе."
     ),
     "Бизнес": (
         "Ты — стратег и консультант по бизнесу и деньгам. Помогаешь искать идеи, "
@@ -75,8 +81,12 @@ MODE_SYSTEM_PROMPTS: Dict[str, str] = {
 }
 
 
+# =========================
+#   ВЗАИМОДЕЙСТВИЕ С DEEPSEEK
+# =========================
+
 async def ask_deepseek(user_id: int, text: str) -> str:
-    # Простой запрос к DeepSeek с учётом выбранного режима.
+    """Отправка запроса в DeepSeek с учётом выбранного режима пользователя."""
     mode = USER_MODES.get(user_id, "Универсальный")
     system_prompt = MODE_SYSTEM_PROMPTS.get(mode, MODE_SYSTEM_PROMPTS["Универсальный"])
 
@@ -102,9 +112,13 @@ async def ask_deepseek(user_id: int, text: str) -> str:
         return data["choices"][0]["message"]["content"].strip()
 
 
+# =========================
+#   ОСНОВНАЯ ЛОГИКА БОТА
+# =========================
+
 async def on_startup(bot: Bot) -> None:
     me = await bot.get_me()
-    logging.info("Bot started as @%s", me.username)
+    logging.info("Bot started as @%s (id=%s)", me.username, me.id)
 
 
 async def main() -> None:
@@ -119,7 +133,7 @@ async def main() -> None:
     )
     dp = Dispatcher(storage=MemoryStorage())
 
-    # /start
+    # ---------- /start ----------
     @dp.message(CommandStart())
     async def cmd_start(message: Message) -> None:
         USER_MODES[message.from_user.id] = "Универсальный"
@@ -130,7 +144,7 @@ async def main() -> None:
         )
         await message.answer(text, reply_markup=MAIN_MENU_KB)
 
-    # Открыть выбор режимов
+    # ---------- Меню режимов ----------
     @dp.message(F.text == "🧠 Режимы")
     async def open_modes(message: Message) -> None:
         await message.answer(
@@ -138,14 +152,14 @@ async def main() -> None:
             reply_markup=MODES_MENU_KB,
         )
 
-    # Выбор режима
+    # ---------- Выбор конкретного режима ----------
     @dp.message(
         F.text.in_(
             ["🧠 Универсальный", "🩺 Медицина", "🔥 Наставник", "💼 Бизнес", "🎨 Креатив"]
         )
     )
     async def set_mode(message: Message) -> None:
-        # Отрезаем эмодзи и пробел
+        # отрезаем эмодзи и пробел
         label = message.text.split(" ", 1)[1] if " " in message.text else message.text
         USER_MODES[message.from_user.id] = label
         await message.answer(
@@ -154,12 +168,12 @@ async def main() -> None:
             reply_markup=MAIN_MENU_KB,
         )
 
-    # Назад в главное меню
+    # ---------- Назад ----------
     @dp.message(F.text == "⬅️ Назад")
     async def back_to_main(message: Message) -> None:
         await message.answer("Возвращаю на главный экран.", reply_markup=MAIN_MENU_KB)
 
-    # Профиль (пока просто инфа)
+    # ---------- Профиль ----------
     @dp.message(F.text == "👤 Профиль")
     async def profile(message: Message) -> None:
         mode = USER_MODES.get(message.from_user.id, "Универсальный")
@@ -170,7 +184,7 @@ async def main() -> None:
             reply_markup=MAIN_MENU_KB,
         )
 
-    # Подписка — заглушка
+    # ---------- Подписка ----------
     @dp.message(F.text == "💎 Подписка")
     async def subscription(message: Message) -> None:
         await message.answer(
@@ -179,17 +193,17 @@ async def main() -> None:
             reply_markup=MAIN_MENU_KB,
         )
 
-    # Рефералы — заглушка
+    # ---------- Рефералы ----------
     @dp.message(F.text == "👥 Рефералы")
     async def referrals(message: Message) -> None:
         await message.answer(
             "👥 <b>Рефералы</b>\n\n"
-            "Реферальная программа в разработке. В будущих версиях ты сможешь "
-            "получать бонусы за приглашённых друзей.",
+            "Реферальная программа в разработке. "
+            "В будущих версиях ты сможешь получать бонусы за приглашённых друзей.",
             reply_markup=MAIN_MENU_KB,
         )
 
-    # Основной чат
+    # ---------- Основной чат ----------
     @dp.message(F.text)
     async def chat(message: Message) -> None:
         try:
@@ -210,10 +224,8 @@ async def main() -> None:
                 "Я уже записал это в лог. Попробуй ещё раз сформулировать запрос."
             )
 
-    # on_startup
+    # ---------- Запуск ----------
     await on_startup(bot)
-
-    # Стартуем поллинг
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
