@@ -10,7 +10,11 @@ from bot.routers import start_router, navigation_router, chat_router
 
 
 def setup_logging() -> None:
-    """Базовая настройка логирования по уровню из конфига."""
+    """
+    Базовая настройка логирования по уровню из конфига.
+
+    Уровень берём из settings.log_level (по умолчанию INFO).
+    """
     level_name = (settings.log_level or "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
 
@@ -24,21 +28,31 @@ def setup_logging() -> None:
 
 
 async def main() -> None:
-    """Точка входа для бота."""
+    """Точка входа для BlackBox GPT бота."""
     setup_logging()
     logger = logging.getLogger(__name__)
     logger.info("🚀 BlackBox GPT бот запускается...")
 
-    bot = Bot(token=settings.bot_token, parse_mode=ParseMode.HTML)
+    # Инициализация бота
+    bot = Bot(
+        token=settings.bot_token,
+        parse_mode=ParseMode.HTML,
+    )
+
+    # Память FSM — можно потом заменить на Redis / БД
     dp = Dispatcher(storage=MemoryStorage())
 
-    # Подключаем все роутеры
+    # Подключаем роутеры
     dp.include_router(start_router)
     dp.include_router(navigation_router)
     dp.include_router(chat_router)
 
     logger.info("✅ Роутеры зарегистрированы, запускаем polling...")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        logger.info("🛑 Останавливаем бота...")
+        await bot.session.close()
 
 
 if __name__ == "__main__":
