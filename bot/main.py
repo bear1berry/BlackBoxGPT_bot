@@ -1,5 +1,3 @@
-# bot/main.py
-
 import asyncio
 import logging
 
@@ -13,55 +11,49 @@ from bot.routers import chat_router, navigation_router, start_router
 
 def setup_logging() -> None:
     """
-    Настройка логирования на основе settings.log_level.
-    Если уровень в .env невалидный, по умолчанию используем INFO.
+    Настройка логгера на основе settings.log_level.
     """
     level_name = getattr(settings, "log_level", "INFO")
-    level = getattr(logging, str(level_name).upper(), logging.INFO)
+    level = getattr(logging, level_name.upper(), logging.INFO)
 
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    logging.getLogger("aiogram").setLevel(level)
+    logging.getLogger("aiogram.event").setLevel(logging.INFO)
 
 
 async def main() -> None:
     """
-    Точка входа бота.
-    Запускает long polling через aiogram 3.x.
+    Точка входа Telegram-бота.
     """
     setup_logging()
-    logger = logging.getLogger("bot.main")
 
-    # Создаём Bot
+    logger = logging.getLogger(__name__)
+    logger.info("=== BlackBox GPT bot starting ===")
+
+    # Создаём бота
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
-    # Диспетчер и роутеры
+    # Диспетчер и маршрутизаторы
     dp = Dispatcher()
 
-    # Порядок важен: сначала старт, потом навигация, потом чат
+    # Подключаем роутеры
     dp.include_router(start_router)
     dp.include_router(navigation_router)
     dp.include_router(chat_router)
 
-    # На всякий случай очищаем висящие апдейты
-    await bot.delete_webhook(drop_pending_updates=True)
+    logger.info("Routers are included. Start polling...")
 
-    logger.info("BlackBox GPT bot is starting polling...")
-
-    # Стартуем polling
-    try:
-        await dp.start_polling(bot)
-    finally:
-        logger.info("BlackBox GPT bot stopped.")
+    # Запуск long-polling
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logging.getLogger("bot.main").info("BlackBox GPT bot terminated by user.")
+        logging.getLogger(__name__).info("Bot stopped by user/system.")
