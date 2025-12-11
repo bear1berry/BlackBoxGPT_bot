@@ -1,5 +1,6 @@
-# bot/main.py
+cd ~/BlackBoxGPT_bot
 
+cat > bot/main.py << 'EOF'
 import asyncio
 import logging
 
@@ -9,7 +10,6 @@ from aiogram.enums import ParseMode
 
 from bot.config import Settings
 from bot.handlers import register_all_handlers
-
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +34,13 @@ async def main() -> None:
         token=settings.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+
     dp = Dispatcher()
 
     # ----- Routers / handlers -----
-    # Вся регистрация хэндлеров — внутри bot/handlers/__init__.py
     register_all_handlers(dp)
 
-    # ----- Webhook cleanup before start -----
-    # На всякий случай гасим возможный вебхук, чтобы polling не конфликтовал.
+    # Чистим вебхук и убираем апдейты перед стартом
     await bot.delete_webhook(drop_pending_updates=True)
 
     # ----- Polling loop -----
@@ -52,11 +51,9 @@ async def main() -> None:
         logger.exception("Unexpected error in polling loop")
         raise
     finally:
-        # Корректно закрываем HTTP-сессию aiogram, чтобы не было
-        # Unclosed client session / Unclosed connector.
-        await bot.session.close()
         logger.info("Bot stopped")
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+EOF
