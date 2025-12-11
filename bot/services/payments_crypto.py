@@ -41,7 +41,10 @@ if settings.crypto_pay_token:
 
 
 async def create_subscription_invoice(user_id: int, months: int, total_price: float) -> Optional[str]:
-    """Создаёт инвойс в Crypto Pay. Возвращает ссылку на оплату или None, если токен не настроен."""
+    """
+    Создаёт инвойс в Crypto Pay.
+    Возвращает ссылку на оплату или None, если токен не настроен.
+    """
     if _crypto_client is None:
         return None
 
