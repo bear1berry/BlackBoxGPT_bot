@@ -1,75 +1,65 @@
-from aiogram.types import (
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-)
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
-# Главный таскбар
-main_menu_keyboard = ReplyKeyboardMarkup(
-    keyboard=[
-        [
-            KeyboardButton(text="🧠 Режимы"),
-            KeyboardButton(text="👤 Профиль"),
-        ],
-        [
-            KeyboardButton(text="💎 Подписка"),
-            KeyboardButton(text="👥 Рефералы"),
-        ],
-    ],
-    resize_keyboard=True,
-)
+from .common import BACK_BUTTON_TEXT
 
 
-# Кнопка "Назад" для вложенных меню
-back_button = InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:back")
+def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    """
+    Главный таскбар.
+    """
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🧠 Режимы")],
+            [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="💎 Подписка")],
+            [KeyboardButton(text="👥 Рефералы")],
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Напиши запрос или выбери пункт меню ↓",
+    )
 
-# Только 2 режима: Универсальный + Профессиональный
-modes_keyboard = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="🧠 Универсальный",
-                callback_data="mode:universal",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="💼 Профессиональный",
-                callback_data="mode:professional",
-            )
-        ],
-        [ [back_button] ],
-    ]
-)
 
-# Меню подписки с новыми ценами
-subscription_keyboard = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="💎 1 месяц — 6.99 USDT",
-                callback_data="sub:plan:1m",
-            )
+def modes_keyboard() -> ReplyKeyboardMarkup:
+    """
+    Меню режимов — только два режима:
+    - Универсальный (DeepSeek, без web)
+    - Профессиональный (DeepSeek + Perplexity, web-поиск, наставник+медицина внутри)
+    """
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🧠 Универсальный")],
+            [KeyboardButton(text="💼 Профессиональный")],
+            [KeyboardButton(text=BACK_BUTTON_TEXT)],
         ],
-        [
-            InlineKeyboardButton(
-                text="💎 3 месяца — 20.99 USDT",
-                callback_data="sub:plan:3m",
-            )
+        resize_keyboard=True,
+        input_field_placeholder="Выбери режим работы ассистента ↓",
+    )
+
+
+def subscription_keyboard() -> ReplyKeyboardMarkup:
+    """
+    Меню подписки.
+    """
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="💎 1 месяц")],
+            [KeyboardButton(text="💎 3 месяца")],
+            [KeyboardButton(text="💎 12 месяцев")],
+            [KeyboardButton(text=BACK_BUTTON_TEXT)],
         ],
-        [
-            InlineKeyboardButton(
-                text="💎 12 месяцев — 59.99 USDT",
-                callback_data="sub:plan:12m",
-            )
+        resize_keyboard=True,
+        input_field_placeholder="Выбери срок подписки ↓",
+    )
+
+
+def profile_keyboard() -> ReplyKeyboardMarkup:
+    # Пока отдельного подменю нет, возвращаем главное
+    return main_menu_keyboard()
+
+
+def referrals_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BACK_BUTTON_TEXT)],
         ],
-        [
-            InlineKeyboardButton(
-                text="🔁 Проверить оплату",
-                callback_data="sub:check",
-            )
-        ],
-        [ [back_button] ],
-    ]
-)
+        resize_keyboard=True,
+    )
