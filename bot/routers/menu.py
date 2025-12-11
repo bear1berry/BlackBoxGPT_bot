@@ -1,79 +1,76 @@
-from aiogram import Router, F
-from aiogram.types import Message
+from __future__ import annotations
 
-from ..keyboards import (
-    main_menu_keyboard,
-    modes_keyboard,
-    subscription_keyboard,
-    BACK_BUTTON_TEXT,
-)
-from ..services.storage import get_user_by_telegram_id, set_current_mode
+from aiogram import F, Router
+from aiogram.types import CallbackQuery, Message
+
+from ..keyboards.main_menu import main_menu_keyboard, modes_keyboard
 from ..services.llm import Mode
+from ..services.storage import get_current_mode, set_current_mode
 
 router = Router(name="menu")
 
 
 @router.message(F.text == "🧠 Режимы")
-async def open_modes(message: Message) -> None:
-    await message.answer(
-        "🧠 **Режимы работы**\n\n"
-        "Выбери режим, в котором я буду отвечать на твои запросы.",
-        reply_markup=modes_keyboard(),
-    )
-
-
-@router.message(F.text == "💎 Подписка")
-async def open_subscription(message: Message) -> None:
-    await message.answer(
-        "💎 **Подписка**\n\n"
-        "Выбери срок подписки, чтобы получить повышенные лимиты и приоритет.",
-        reply_markup=subscription_keyboard(),
-    )
-
-
-@router.message(F.text == BACK_BUTTON_TEXT)
-async def back_to_main(message: Message) -> None:
-    await message.answer(
-        "⬅️ Возвращаю тебя в главное меню.",
-        reply_markup=main_menu_keyboard(),
-    )
-
-
-async def _set_mode(message: Message, mode: Mode) -> None:
-    user = await get_user_by_telegram_id(message.from_user.id)
+async def show_modes(message: Message) -> None:
+    user = message.from_user
     if not user:
-        await message.answer("Не нашёл твой профиль, отправь /start.", reply_markup=main_menu_keyboard())
         return
 
-    await set_current_mode(user["id"], mode)
-    human = {
-        Mode.UNIVERSAL: "🧠 Универсальный",
-        Mode.PROFESSIONAL: "💼 Профессиональный",
-        Mode.MENTOR: "🔥 Наставник",
-        Mode.MEDICINE: "🩺 Медицина",
-    }[mode]
-    await message.answer(
-        f"{human} режим активирован.\n\n"
-        "Теперь просто напиши запрос — я буду отвечать в выбранном стиле.",
-        reply_markup=main_menu_keyboard(),
+    # Читаем текущий режим из БД
+    current_mode = await get_current_mode(user.id)
+    kb = modes_keyboard(current=current_mode.value)
+
+    text = (
+        "🧠 *Режимы работы бота*\n\n"
+        "• *Универсальный* — базовый режим DeepSeek для любых задач.\n"
+        "• *Профессиональный* — усиленный режим: наставник + медицина, "
+        "умеет подключать WEB-поиск через Perplexity.\n\n"
+        "Просто выбери нужный режим ниже."
     )
 
-
-@router.message(F.text == "🧠 Универсальный")
-async def set_mode_universal(message: Message) -> None:
-    await _set_mode(message, Mode.UNIVERSAL)
+    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
 
 
-@router.message(F.text == "💼 Профессиональный")
-async def set_mode_professional(message: Message) -> None:
-    await _set_mode(message, Mode.PROFESSIONAL)
+@router.callback_query(F.data == "menu:back")
+async def back_to_main_menu(callback: CallbackQuery) -> None:
+    await callback.message.edit_text(
+        "Главное меню.",
+        reply_markup=None,
+    )
+    await callback.message.answer(
+        "Выбери действие в нижнем меню.",
+        reply_markup=main_menu_keyboard(),
+    )
+    await callback.answer()
 
 
-@router.message(F.text == "🔥 Наставник")
-async def set_mode_mentor(message: Message) -> None:
-    await _set_mode(message, Mode.MENTOR)
+@router.callback_query(F.data.startswith("mode:"))
+async def switch_mode(callback: CallbackQuery) -> None:
+    user = callback.from_user
+    if not user:
+        return
 
+    _, mode_code = callback.data.split(":", maxsplit=1)
+    if mode_code == "universal":
+        mode = Mode.UNIVERSAL
+    else:
+        mode = Mode.PROFESSIONAL
 
-@router.message(F.text == "🩺 Медицина")
-async def set_mode_medicine(message: Message) -> None:
-    await _set_mode(message, Mode.MEDICINE)
+    await set_current_mode(user.id, mode)
+
+    kb = modes_keyboard(current=mode.value)
+
+    if mode is Mode.UNIVERSAL:
+        text = (
+            "🧠 *Универсальный режим активирован.*\n\n"
+            "DeepSeek без web-поиска. Подходит для большинства запросов."
+        )
+    else:
+        text = (
+            "🏆 *Профессиональный режим активирован.*\n\n"
+            "Наставник + медицинский помощник. При запросах, где нужен интернет, "
+            "бот автоматически подключит Perplexity и web-поиск."
+        )
+
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.answer("Режим обновлён ✅")
