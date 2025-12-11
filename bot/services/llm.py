@@ -1,201 +1,359 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import AsyncIterator, Optional, List, Dict, Any
+from typing import AsyncGenerator, Optional
 
 import httpx
 
 from ..config import settings
-from .text_postprocess import prepare_answer
+from .web_search import research as web_research
+
+log = logging.getLogger(__name__)
 
 
 class Mode(str, Enum):
+    """
+    Режимы работы бота.
+
+    Сейчас в интерфейсе используются только:
+    - UNIVERSAL
+    - PROFESSIONAL
+
+    MENTOR / MEDICINE оставлены для обратной совместимости и
+    внутри маппятся на PROFESSIONAL.
+    """
+
     UNIVERSAL = "universal"
     PROFESSIONAL = "professional"
+
+    # legacy / внутренняя совместимость
     MENTOR = "mentor"
     MEDICINE = "medicine"
+    RESEARCH = "research"
 
 
 @dataclass
 class StyleParams:
-    formality: int = 2        # 1 — неформально, 3 — максимально официально
-    emotionality: int = 2     # 1 — сухо, 3 — эмоционально
-    length: int = 2           # 1 — очень коротко, 3 — развёрнуто
+    """
+    Простая модель стиля:
+    0 – минимальное значение, 4 – максимальное.
+    """
+
+    formality: int = 2
+    emotionality: int = 2
+    length: int = 2
+
+    def clamp(self) -> "StyleParams":
+        def _c(v: int) -> int:
+            return max(0, min(4, int(v)))
+
+        return StyleParams(
+            formality=_c(self.formality),
+            emotionality=_c(self.emotionality),
+            length=_c(self.length),
+        )
 
 
-def infer_style_from_text(text: str) -> StyleParams:
-    lowered = text.lower()
-    has_slang = any(word in lowered for word in ["бро", "брат", "ахах", "лол", "хаха"])
-    has_hello = any(
-        word in lowered
-        for word in ["здравствуйте", "добрый день", "доброе утро", "добрый вечер"]
+def normalize_mode(mode: Mode) -> Mode:
+    """Любые старые режимы приводим к актуальным."""
+    if mode in (Mode.MENTOR, Mode.MEDICINE):
+        return Mode.PROFESSIONAL
+    return mode
+
+
+def build_system_prompt(mode: Mode, style: StyleParams) -> str:
+    """
+    Общий системный промпт.
+
+    Здесь мы «запихиваем» наставника и медицину в профессиональный режим.
+    """
+    style = style.clamp()
+
+    base = (
+        "Ты — умный, точный и аккуратный русскоязычный ассистент. "
+        "Отвечай структурировано, коротко, без воды, строго по запросу пользователя. "
+        "Если не хватает данных, задавай уточняющие вопросы."
     )
-    emojis = sum(ord(ch) >= 0x1F300 for ch in text)
-    exclam = text.count("!")
 
-    if has_slang or emojis >= 1:
-        formality = 1
-    elif has_hello:
-        formality = 3
+    # Небольшое влияние стиля на тон
+    tones = {
+        0: "Стиль: максимально разговорный, дружелюбный, без формальностей.",
+        1: "Стиль: более свободный, допускается немного юмора.",
+        2: "Стиль: баланс между разговорным и деловым тоном.",
+        3: "Стиль: деловой, сдержанный.",
+        4: "Стиль: максимально формальный, как официальный документ.",
+    }
+
+    emotional = {
+        0: "Эмоции: почти полное отсутствие эмоциональной окраски.",
+        1: "Эмоции: легкая поддержка, но без пафоса.",
+        2: "Эмоции: умеренная мотивация и поддержка.",
+        3: "Эмоции: яркая мотивация, вдохновляющие формулировки.",
+        4: "Эмоции: максимально сильные мотивационные и вдохновляющие формулировки.",
+    }
+
+    length = {
+        0: "Длина ответа: максимально коротко (1–2 предложения).",
+        1: "Длина ответа: коротко, только суть.",
+        2: "Длина ответа: средне – несколько абзацев, если нужно.",
+        3: "Длина ответа: можно развернуто, но без лишней воды.",
+        4: "Длина ответа: детально, с примерами и списками.",
+    }
+
+    mode = normalize_mode(mode)
+
+    if mode == Mode.UNIVERSAL:
+        role = (
+            "Режим: универсальный ассистент для повседневных задач, работы, учебы, "
+            "повседневных вопросов, идей, планирования. "
+            "Не давай медицинских диагнозов и не выдавай себя за врача."
+        )
+    elif mode == Mode.PROFESSIONAL:
+        role = (
+            "Режим: профессиональный. "
+            "Ты совмещаешь роли наставника, ментального коуча и медицинского помощника. "
+            "В медицинских вопросах: отвечай как врач-специалист, но всегда подчёркивай, "
+            "что это не замена очной консультации. Не ставь диагнозов, не назначай лекарства "
+            "без формулировки вида 'обсудите с лечащим врачом'. "
+            "В немедицинских запросах – как жёсткий, но доброжелательный наставник: "
+            "конкретика, структура, план действий."
+        )
     else:
-        formality = 2
+        # На всякий случай
+        role = "Режим: универсальный."
 
-    if exclam >= 2 or emojis >= 2:
-        emotionality = 3
-    elif exclam == 0 and emojis == 0:
-        emotionality = 1
-    else:
-        emotionality = 2
+    return "\n\n".join(
+        [
+            base,
+            role,
+            tones[style.formality],
+            emotional[style.emotionality],
+            length[style.length],
+        ]
+    )
 
-    length = 2
-    return StyleParams(formality=formality, emotionality=emotionality, length=length)
+
+def needs_web_search(query: str) -> bool:
+    """
+    Очень простая эвристика, когда в проф-режиме переключаться на Perplexity (WEB).
+    Можно потом заменить на нормальный классификатор.
+    """
+    q = query.lower()
+
+    trigger_words = [
+        "в интернете",
+        "найди",
+        "поиск",
+        "search",
+        "последние новости",
+        "что сейчас",
+        "что нового",
+        "тренды",
+        "статистика",
+        "актуальные данные",
+        "цен",
+        "стоимость",
+    ]
+
+    if any(word in q for word in trigger_words):
+        return True
+
+    # Частые запросы про «что происходит сейчас» без прямых ключей
+    if "сейчас" in q and "как" not in q and "почему" not in q:
+        return True
+
+    return False
 
 
 class LLMClient:
-    def __init__(
-        self,
-        deepseek_api_key: str,
-        deepseek_model: str = "deepseek-chat",
-        perplexity_api_key: Optional[str] = None,
-        perplexity_model: str = "llama-3.1-sonar-small-128k-online",
-    ) -> None:
-        self.deepseek_api_key = deepseek_api_key
-        self.deepseek_model = deepseek_model
-        self.perplexity_api_key = perplexity_api_key
-        self.perplexity_model = perplexity_model
+    def __init__(self) -> None:
+        self._deepseek_url = "https://api.deepseek.com/chat/completions"
+        self._perplexity_url = "https://api.perplexity.ai/chat/completions"
 
-    async def ask(
+    async def _ask_deepseek_stream(
         self,
         user_prompt: str,
-        mode: Mode = Mode.UNIVERSAL,
-        style: Optional[StyleParams] = None,
-        dialog_history: Optional[List[Dict[str, Any]]] = None,
+        system_prompt: str,
+        temperature: float = 0.7,
+    ) -> AsyncGenerator[str, None]:
+        if not settings.deepseek_api_key:
+            yield "DeepSeek API-ключ не настроен. Добавь DEEPSEEK_API_KEY в .env."
+            return
+
+        headers = {
+            "Authorization": f"Bearer {settings.deepseek_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "model": settings.deepseek_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "stream": True,
+        }
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+            async with client.stream("POST", self._deepseek_url, headers=headers, json=payload) as resp:
+                resp.raise_for_status()
+
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+
+                    data = line[len("data:") :].strip()
+                    if data == "[DONE]":
+                        break
+
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+
+                    delta = (
+                        chunk.get("choices", [{}])[0]
+                        .get("delta", {})
+                        .get("content")
+                    )
+                    if delta:
+                        yield delta
+
+    async def _ask_perplexity_once(
+        self,
+        user_prompt: str,
+        system_prompt: str,
+        temperature: float = 0.2,
     ) -> str:
-        messages = self._build_messages(
-            user_prompt,
-            mode=mode,
-            style=style,
-            dialog_history=dialog_history,
-        )
-        raw = await self._call_provider(messages, mode=mode)
-        return prepare_answer(raw)
+        """
+        Обычный (нестриминговый) вызов Perplexity. Используется для web-режима
+        и как «умный» проф-режим.
+        """
+        if not settings.perplexity_api_key:
+            return (
+                "Perplexity API-ключ не настроен. Добавь PERPLEXITY_API_KEY в .env "
+                "или используй универсальный режим."
+            )
+
+        headers = {
+            "Authorization": f"Bearer {settings.perplexity_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "model": settings.perplexity_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        system_prompt
+                        + "\n\nТы можешь использовать актуальные данные из интернета. "
+                        "Если информации нет или она противоречива — честно скажи об этом."
+                    ),
+                },
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "top_p": 0.9,
+            "stream": False,
+        }
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0)) as client:
+            resp = await client.post(self._perplexity_url, headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"]
 
     async def ask_stream(
         self,
         user_prompt: str,
-        mode: Mode = Mode.UNIVERSAL,
-        style: Optional[StyleParams] = None,
-        dialog_history: Optional[List[Dict[str, Any]]] = None,
-    ) -> AsyncIterator[str]:
-        """
-        Псевдо-стриминг: сначала получаем полный ответ от модели, затем отдаём его по кусочкам.
-        Это проще и стабильнее, чем работать с настоящим SSE-стримингом.
-        """
-        full = await self.ask(
-            user_prompt=user_prompt,
-            mode=mode,
-            style=style,
-            dialog_history=dialog_history,
-        )
-        chunk_size = 400
-        for i in range(0, len(full), chunk_size):
-            yield full[i : i + chunk_size]
-
-    def _build_messages(
-        self,
-        user_prompt: str,
         mode: Mode,
-        style: Optional[StyleParams],
-        dialog_history: Optional[List[Dict[str, Any]]],
-    ) -> List[Dict[str, str]]:
-        system_parts = [
-            "Ты — BlackBoxGPT, универсальный AI-ассистент в Telegram.",
-            "Отвечай структурированно, короткими абзацами, с подзаголовками и списками, где это уместно.",
-            "Пиши на русском, если пользователь не попросил другое.",
-            "Используй Markdown: **жирный**, списки, но без чрезмерного форматирования.",
-            "Если тема связана с медициной — давай только общие рекомендации без точных дозировок и диагнозов.",
-        ]
+        style: StyleParams,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Главная точка входа.
 
-        if mode == Mode.MENTOR:
-            system_parts.append(
-                "Ты выступаешь как наставник по дисциплине, режиму дня, целям. "
-                "Отвечай жёстко, но поддерживающе: короткая мотивация + практическая задача."
-            )
-        elif mode == Mode.MEDICINE:
-            system_parts.append(
-                "Ты — врач-эпидемиолог-консультант. Даёшь только общие справочные сведения, "
-                "не ставишь диагнозы и не назначаешь лечение. Всегда добавляй предупреждение "
-                "о необходимости очного осмотра врача при серьёзных симптомах."
-            )
-        elif mode == Mode.PROFESSIONAL:
-            system_parts.append(
-                "Режим профессиональной аналитики: отвечай максимально строго, логично и структурировано, "
-                "с фокусом на факты и аргументацию."
-            )
+        - UNIVERSAL → DeepSeek
+        - PROFESSIONAL:
+            - если needs_web_search == True → Perplexity (web)
+            - иначе → DeepSeek
+        - RESEARCH → всегда Perplexity (web)
+        """
+        mode = normalize_mode(mode)
+        style = style.clamp()
 
-        if style:
-            system_parts.append(
-                f"Формальность: {style.formality}/3, эмоциональность: {style.emotionality}/3, "
-                f"развёрнутость: {style.length}/3. Подстрой формат ответа под эти параметры."
-            )
+        try:
+            # Чистый web-режим: всегда Perplexity + web_search()
+            if mode == Mode.RESEARCH:
+                web_answer = await web_research(user_prompt)
+                yield web_answer
+                return
 
-        system_prompt = " ".join(system_parts)
+            system_prompt = build_system_prompt(mode, style)
 
-        messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
-        if dialog_history:
-            messages.extend(dialog_history)
-        messages.append({"role": "user", "content": user_prompt})
-        return messages
+            # Профессиональный режим: умеет сам включать Perplexity
+            if mode == Mode.PROFESSIONAL and needs_web_search(user_prompt):
+                answer = await self._ask_perplexity_once(
+                    user_prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    temperature=0.3,
+                )
+                yield answer
+                return
 
-    async def _call_provider(self, messages: List[Dict[str, str]], mode: Mode) -> str:
-        if mode == Mode.PROFESSIONAL and self.perplexity_api_key:
-            try:
-                return await self._call_perplexity(messages)
-            except Exception:
-                # При ошибке Perplexity тихо откатываемся на DeepSeek
-                pass
-        return await self._call_deepseek(messages)
+            # Всё остальное — DeepSeek стримом
+            async for chunk in self._ask_deepseek_stream(
+                user_prompt=user_prompt,
+                system_prompt=system_prompt,
+                temperature=0.7 if mode == Mode.UNIVERSAL else 0.6,
+            ):
+                yield chunk
 
-    async def _call_deepseek(self, messages: List[Dict[str, str]]) -> str:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                "https://api.deepseek.com/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.deepseek_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.deepseek_model,
-                    "messages": messages,
-                    "stream": False,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
-
-    async def _call_perplexity(self, messages: List[Dict[str, str]]) -> str:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                "https://api.perplexity.ai/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.perplexity_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.perplexity_model,
-                    "messages": messages,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+        except httpx.HTTPStatusError as e:
+            log.exception("LLM HTTP error: %s", e)
+            yield "Модель сейчас недоступна или вернула ошибку. Попробуй ещё раз чуть позже."
+        except Exception as e:  # noqa: BLE001
+            log.exception("LLM unexpected error: %s", e)
+            yield "Произошла внутренняя ошибка при обращении к модели."
 
 
-llm_client = LLMClient(
-    deepseek_api_key=settings.deepseek_api_key,
-    deepseek_model=getattr(settings, "deepseek_model", "deepseek-chat"),
-    perplexity_api_key=getattr(settings, "perplexity_api_key", None),
-    perplexity_model=getattr(settings, "perplexity_model", "llama-3.1-sonar-small-128k-online"),
-)
+llm_client = LLMClient()
+
+
+def infer_style_from_text(text: str) -> StyleParams:
+    """
+    Очень грубая эвристика для автоподстройки стиля по тексту пользователя.
+    Можно потом заменить на нормальный анализатор.
+    """
+    text_l = text.lower()
+
+    formality = 2
+    if any(w in text_l for w in ("уважаемый", "доклад", "отчёт", "официальное")):
+        formality = 3
+    if any(w in text_l for w in ("чувак", "бро", "лол", "ахаха")):
+        formality = 1
+
+    emotionality = 2
+    if any(w in text_l for w in ("ненавижу", "ужасно", "бесит", "очень хочу")):
+        emotionality = 3
+    if any(w in text_l for w in ("нормально", "ладно", "в целом ок")):
+        emotionality = 1
+
+    length = 2
+    if len(text) < 40:
+        length = 1
+    if len(text) > 500:
+        length = 3
+
+    return StyleParams(
+        formality=formality,
+        emotionality=emotionality,
+        length=length,
+    )
