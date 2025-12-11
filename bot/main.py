@@ -37,21 +37,24 @@ async def main() -> None:
     dp = Dispatcher()
 
     # ----- Routers / handlers -----
+    # Вся регистрация хэндлеров — внутри bot/handlers/__init__.py
     register_all_handlers(dp)
 
-    # Чистим вебхук и висящие апдейты перед стартом
+    # ----- Webhook cleanup before start -----
+    # На всякий случай гасим возможный вебхук, чтобы polling не конфликтовал.
     await bot.delete_webhook(drop_pending_updates=True)
 
     # ----- Polling loop -----
     try:
-        # async with гарантирует закрытие aiohttp-сессии → не будет "Unclosed connector"
-        async with bot:
-            logger.info("Bot polling started")
-            await dp.start_polling(bot)
+        logger.info("Bot polling started")
+        await dp.start_polling(bot)
     except Exception:
         logger.exception("Unexpected error in polling loop")
         raise
     finally:
+        # Корректно закрываем HTTP-сессию aiogram, чтобы не было
+        # Unclosed client session / Unclosed connector.
+        await bot.session.close()
         logger.info("Bot stopped")
 
 
