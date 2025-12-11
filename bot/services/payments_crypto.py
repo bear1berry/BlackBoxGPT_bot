@@ -1,74 +1,73 @@
 from __future__ import annotations
 
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List
 
 import httpx
 
 from ..config import settings
-from ..db.db import db
 
-BASE_URL = "https://pay.crypt.bot/api/"
+API_BASE_URL = "https://pay.crypt.bot/api"
+
+
+@dataclass
+class Invoice:
+    invoice_id: int
+    status: str
+    pay_url: str
+    asset: str
+    amount: str
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Invoice":
+        return cls(
+            invoice_id=data["invoice_id"],
+            status=data["status"],
+            pay_url=data["pay_url"],
+            asset=data["asset"],
+            amount=str(data["amount"]),
+        )
 
 
 class CryptoPayClient:
     def __init__(self, token: str) -> None:
-        self._client = httpx.AsyncClient(
-            base_url=BASE_URL,
-            headers={"Crypto-Pay-API-Token": token},
-            timeout=30.0,
-        )
+        self._token = token
+        self._client = httpx.AsyncClient(base_url=API_BASE_URL, timeout=15.0)
 
-    async def create_invoice(self, asset: str, amount: float, description: str, payload: str) -> dict:
-        response = await self._client.post(
-            "createInvoice",
-            json={
-                "asset": asset,
-                "amount": str(amount),
-                "description": description,
-                "payload": payload,
-            },
+    async def _request(self, method: str, payload: Dict[str, Any]) -> Any:
+        resp = await self._client.post(
+            method,
+            json=payload,
+            headers={"Crypto-Pay-API-Token": self._token},
         )
-        response.raise_for_status()
-        data = response.json()
+        resp.raise_for_status()
+        data = resp.json()
         if not data.get("ok"):
-            raise RuntimeError(f"Crypto Pay error: {data}")
+            raise RuntimeError(f"Crypto Pay API error: {data}")
         return data["result"]
 
+    async def create_invoice(
+        self,
+        *,
+        amount: str,
+        asset: str = "USDT",
+        description: str | None = None,
+        payload: str | None = None,
+    ) -> Invoice:
+        body: Dict[str, Any] = {"asset": asset, "amount": amount}
+        if description:
+            body["description"] = description
+        if payload:
+            body["payload"] = payload
 
-_crypto_client: Optional[CryptoPayClient] = None
-if settings.crypto_pay_token:
-    _crypto_client = CryptoPayClient(settings.crypto_pay_token)
+        result = await self._request("createInvoice", body)
+        return Invoice.from_dict(result)
+
+    async def get_invoices(self, invoice_ids: List[int]) -> List[Invoice]:
+        if not invoice_ids:
+            return []
+        result = await self._request("getInvoices", {"invoice_ids": invoice_ids})
+        return [Invoice.from_dict(item) for item in result]
 
 
-async def create_subscription_invoice(user_id: int, months: int, total_price: float) -> Optional[str]:
-    """
-    Создаёт инвойс в Crypto Pay.
-    Возвращает ссылку на оплату или None, если токен не настроен.
-    """
-    if _crypto_client is None:
-        return None
-
-    payload = f"sub:{user_id}:{months}"
-    invoice = await _crypto_client.create_invoice(
-        asset=settings.crypto_currency,
-        amount=total_price,
-        description=f"Подписка BlackBoxGPT на {months} мес.",
-        payload=payload,
-    )
-    pay_url = invoice.get("pay_url")
-    external_id = invoice.get("invoice_id") or str(invoice.get("id"))
-
-    await db.execute(
-        """
-        INSERT INTO payments (user_id, provider, external_id, amount, currency, status)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        """,
-        user_id,
-        "cryptopay",
-        str(external_id),
-        total_price,
-        settings.crypto_currency,
-        "pending",
-    )
-
-    return pay_url
+crypto_pay = CryptoPayClient(settings.cryptopay_token)
