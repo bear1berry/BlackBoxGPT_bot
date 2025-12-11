@@ -10,7 +10,7 @@ from .llm import Mode
 
 
 def generate_referral_code(telegram_id: int) -> str:
-    \"""Простая стабильная генерация реферального кода на основе telegram_id.\"""
+    """Простая стабильная генерация реферального кода на основе telegram_id."""
     alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     n = telegram_id
     if n <= 0:
@@ -35,6 +35,10 @@ async def get_user_by_referral_code(ref_code: str) -> Optional[asyncpg.Record]:
 
 
 async def ensure_user(tg_user: TgUser, ref_code: Optional[str] = None) -> asyncpg.Record:
+    """
+    Возвращает существующего пользователя или создаёт нового.
+    Если передан реф-код и он валиден — привязывает referrer_id.
+    """
     existing = await get_user_by_telegram_id(tg_user.id)
     if existing:
         return existing
