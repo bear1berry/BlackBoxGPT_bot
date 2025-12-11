@@ -31,19 +31,19 @@ def infer_style_from_text(text: str) -> StyleParams:
         word in lowered
         for word in ["здравствуйте", "добрый день", "доброе утро", "добрый вечер"]
     )
-    emojies = sum(ch >= "\U0001F300" for ch in text)
+    emojis = sum(ord(ch) >= 0x1F300 for ch in text)
     exclam = text.count("!")
 
-    if has_slang or emojies >= 1:
+    if has_slang or emojis >= 1:
         formality = 1
     elif has_hello:
         formality = 3
     else:
         formality = 2
 
-    if exclam >= 2 or emojies >= 2:
+    if exclam >= 2 or emojis >= 2:
         emotionality = 3
-    elif exclam == 0 and emojies == 0:
+    elif exclam == 0 and emojis == 0:
         emotionality = 1
     else:
         emotionality = 2
