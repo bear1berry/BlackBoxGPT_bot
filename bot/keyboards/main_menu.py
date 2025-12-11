@@ -1,12 +1,9 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
-from .common import BACK_BUTTON_TEXT
+BACK_BUTTON_TEXT = "⬅️ Назад"
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
-    """
-    Главный таскбар.
-    """
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🧠 Режимы")],
@@ -19,11 +16,6 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 
 
 def modes_keyboard() -> ReplyKeyboardMarkup:
-    """
-    Меню режимов — только два режима:
-    - Универсальный (DeepSeek, без web)
-    - Профессиональный (DeepSeek + Perplexity, web-поиск, наставник+медицина внутри)
-    """
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🧠 Универсальный")],
@@ -36,9 +28,6 @@ def modes_keyboard() -> ReplyKeyboardMarkup:
 
 
 def subscription_keyboard() -> ReplyKeyboardMarkup:
-    """
-    Меню подписки.
-    """
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="💎 1 месяц")],
@@ -52,14 +41,11 @@ def subscription_keyboard() -> ReplyKeyboardMarkup:
 
 
 def profile_keyboard() -> ReplyKeyboardMarkup:
-    # Пока отдельного подменю нет, возвращаем главное
     return main_menu_keyboard()
 
 
 def referrals_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=BACK_BUTTON_TEXT)],
-        ],
+        keyboard=[[KeyboardButton(text=BACK_BUTTON_TEXT)]],
         resize_keyboard=True,
     )
