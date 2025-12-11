@@ -1,65 +1,98 @@
 from __future__ import annotations
 
-import logging
-from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
-import httpx
 from aiogram import Router, F
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery
+from aiogram.utils.keyboard import InlineKeyboardMarkup, InlineKeyboardButton
 
-from ..config import settings
-from ..keyboards.main_menu import (
-    subscription_keyboard,
-    main_menu_keyboard,
-)
+from ..db.db import db
+from ..keyboards.main_menu import main_menu_keyboard, subscription_keyboard
 from ..services.storage import ensure_user
+from ..services.payments_crypto import (
+    is_cryptopay_configured,
+    create_invoice_usdt,
+    get_invoice_status,
+)
 
-logger = logging.getLogger(__name__)
-
-router = Router()
-
-
-@dataclass(frozen=True)
-class Plan:
-    button_text: str
-    code: str
-    months: int
-    price_usdt: float
-    title: str
+router = Router(name="subscription")
 
 
-PLANS: dict[str, Plan] = {
-    "💎 1 месяц": Plan(
-        button_text="💎 1 месяц",
-        code="sub_1m",
-        months=1,
-        price_usdt=6.99,
-        title="Подписка на 1 месяц",
-    ),
-    "💎 3 месяца": Plan(
-        button_text="💎 3 месяца",
-        code="sub_3m",
-        months=3,
-        price_usdt=20.99,
-        title="Подписка на 3 месяца",
-    ),
-    "💎 12 месяцев": Plan(
-        button_text="💎 12 месяцев",
-        code="sub_12m",
-        months=12,
-        price_usdt=59.99,
-        title="Подписка на 12 месяцев",
-    ),
-}
+# Цены в USDT
+ONE_MONTH_PRICE = 6.99
+THREE_MONTH_PRICE = 20.99
+TWELVE_MONTH_PRICE = 59.99
 
 
-def _invoice_keyboard(pay_url: str) -> InlineKeyboardMarkup:
+async def _get_plan(user_id: int) -> tuple[str, datetime | None]:
     """
-    Инлайн-клавиатура под сообщением с оплатой.
+    Получаем текущий план и срок действия, при необходимости
+    автоматически отключаем просроченный Premium.
+    """
+    row = await db.fetchrow(
+        "SELECT plan, plan_until FROM users WHERE id=$1",
+        user_id,
+    )
+    if not row:
+        return "free", None
+
+    plan = row["plan"] or "free"
+    plan_until = row["plan_until"]
+
+    if plan == "premium" and plan_until is not None:
+        now = datetime.now(timezone.utc)
+        if plan_until <= now:
+            # Подписка истекла — откатываемся на free
+            await db.execute(
+                "UPDATE users SET plan='free', plan_until=NULL WHERE id=$1",
+                user_id,
+            )
+            return "free", None
+
+    return plan, plan_until
+
+
+async def _activate_premium(user_id: int, months: int) -> datetime:
+    """
+    Включаем / продлеваем Premium-подписку на указанное количество месяцев.
+    Месяц считаем условно как 30 дней.
+    """
+    now = datetime.now(timezone.utc)
+
+    row = await db.fetchrow(
+        "SELECT plan_until FROM users WHERE id=$1",
+        user_id,
+    )
+    current_until = row["plan_until"] if row else None
+
+    if current_until and isinstance(current_until, datetime) and current_until > now:
+        base = current_until
+    else:
+        base = now
+
+    new_until = base + timedelta(days=30 * months)
+
+    await db.execute(
+        "UPDATE users SET plan='premium', plan_until=$1 WHERE id=$2",
+        new_until,
+        user_id,
+    )
+
+    return new_until
+
+
+def _payment_keyboard(invoice_id: str, months: int) -> InlineKeyboardMarkup:
+    """
+    Клавиатура под сообщением с оплатой.
     """
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить через Crypto Bot", url=pay_url)],
+            [
+                InlineKeyboardButton(
+                    text="✅ Проверить оплату",
+                    callback_data=f"check_invoice:{invoice_id}:{months}",
+                )
+            ]
         ]
     )
 
@@ -67,128 +100,147 @@ def _invoice_keyboard(pay_url: str) -> InlineKeyboardMarkup:
 @router.message(F.text == "💎 Подписка")
 async def subscription_entry(message: Message) -> None:
     """
-    Вход в раздел подписки.
+    Обработка входа в раздел «Подписка».
+    Показываем текущий тариф и предлагаем варианты оплаты.
     """
-    text = (
-        "💎 <b>Подписка</b>\n\n"
-        "Выбери срок подписки, чтобы получить повышенные лимиты и приоритет.\n\n"
-        "<b>Тарифы:</b>\n"
-        "• <b>Базовый</b> — бесплатно, до 10 запросов, затем бот предложит оформить Premium.\n"
-        "• <b>Premium</b> — до 100 запросов в день, приоритетные ответы, доступ к профессиональному режиму.\n"
-    )
+    user = await ensure_user(message.from_user)
+    plan, plan_until = await _get_plan(user["id"])
 
-    await message.answer(
-        text,
-        reply_markup=subscription_keyboard(),
-    )
+    if plan == "premium" and plan_until:
+        until_str = plan_until.astimezone(timezone.utc).strftime("%d.%m.%Y")
+        text = (
+            "💎 <b>Подписка</b>\n\n"
+            "Сейчас у тебя активен тариф <b>Premium</b>.\n"
+            f"Действует до: <b>{until_str}</b> (UTC).\n\n"
+            "Ограничения:\n"
+            "• Free — 10 запросов всего.\n"
+            "• Premium — до 100 запросов в день.\n\n"
+            "Хочешь продлить — выбери срок подписки:"
+        )
+    else:
+        text = (
+            "💎 <b>Подписка</b>\n\n"
+            "Сейчас у тебя тариф <b>Free</b>.\n"
+            "Ограничения:\n"
+            "• Free — 10 запросов за всё время.\n"
+            "• Premium — до 100 запросов в день + приоритет к модели.\n\n"
+            "Выбери срок подписки, чтобы перейти на Premium:"
+        )
 
+    if not is_cryptopay_configured():
+        # Токен не настроен — честно говорим об этом
+        text += (
+            "\n\n⚠️ Платёж через Crypto Bot пока не настроен.\n"
+            "Технически всё готово — добавь токен Crypto Pay в .env "
+            "и перезапусти бота."
+        )
+        await message.answer(text, reply_markup=subscription_keyboard())
+        return
 
-async def _create_cryptobot_invoice(
-    user_tg_id: int,
-    plan: Plan,
-) -> str:
-    """
-    Минимальный клиент для CryptoBot (Crypto Pay API).
-
-    Возвращает URL для оплаты.
-    """
-    if not settings.cryptopay_api_token:
-        raise RuntimeError("CRYPTOPAY_API_TOKEN is not configured")
-
-    # Документация: https://help.crypt.bot/crypto-pay-api
-    base_url = "https://pay.crypt.bot/api"
-    headers = {
-        "Crypto-Pay-API-Token": settings.cryptopay_api_token,
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "asset": "USDT",
-        "amount": str(plan.price_usdt),
-        "currency_type": "crypto",  # платёж именно в USDT
-        "description": plan.title,
-        # Полезно закодировать пользователя и план в payload
-        "payload": f"user:{user_tg_id}|plan:{plan.code}",
-        # Чтобы инвойс не висел вечно
-        "expires_in": 3600,  # 1 час
-        "allow_anonymous": True,
-        "allow_comments": False,
-    }
-
-    async with httpx.AsyncClient(base_url=base_url, timeout=15.0) as client:
-        resp = await client.post("/createInvoice", headers=headers, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-
-    if not data.get("ok"):
-        logger.error("CryptoBot createInvoice error: %s", data)
-        raise RuntimeError("CryptoBot returned error")
-
-    result = data["result"]
-    pay_url = result["pay_url"]
-    invoice_id = result["invoice_id"]
-
-    logger.info(
-        "Created CryptoBot invoice: invoice_id=%s user_tg_id=%s plan=%s amount=%s",
-        invoice_id,
-        user_tg_id,
-        plan.code,
-        plan.price_usdt,
-    )
-
-    # ⚠️ Здесь мы пока НЕ пишем ничего в БД.
-    # На следующем шаге можно:
-    # - сохранить invoice_id в таблицу payments
-    # - проверять оплату по invoice_id через /getInvoices
-    # - при успешной оплате создавать/продлевать подписку в subscriptions.
-    return pay_url
+    await message.answer(text, reply_markup=subscription_keyboard())
 
 
-@router.message(F.text.in_(PLANS.keys()))
-async def handle_plan_choice(message: Message) -> None:
-    """
-    Обработка выбора конкретного тарифа (1 / 3 / 12 месяцев).
-    """
-    plan = PLANS[message.text]
+@router.message(F.text == "💎 1 месяц")
+async def handle_one_month(message: Message) -> None:
+    user = await ensure_user(message.from_user)
 
-    # Если токен CryptoBot не задан — честно говорим об этом.
-    if not settings.cryptopay_api_token:
+    if not is_cryptopay_configured():
         await message.answer(
-            "⚠️ Платёж через Crypto Bot пока не настроен.\n\n"
-            "Технически всё готово — добавь токен Crypto Pay в <code>.env</code> "
-            "в переменную <code>CRYPTOPAY_API_TOKEN</code> и перезапусти бота.\n\n"
-            "После этого здесь будет появляться ссылка на инвойс для оплаты.",
+            "⚠️ Платёж через Crypto Bot пока не настроен.\n"
+            "Добавь CRYPTOPAY_API_TOKEN в .env и перезапусти бота.",
             reply_markup=main_menu_keyboard(),
         )
         return
 
-    # Убеждаемся, что пользователь есть в нашей БД (создаём, если нужно)
-    await ensure_user(message.from_user)
-
-    try:
-        pay_url = await _create_cryptobot_invoice(
-            user_tg_id=message.from_user.id,
-            plan=plan,
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.exception("Failed to create CryptoBot invoice: %s", e)
-        await message.answer(
-            "⚠️ Не получилось создать инвойс в Crypto Bot.\n"
-            "Попробуй ещё раз чуть позже или напиши администратору.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
+    invoice_id, pay_url = await create_invoice_usdt(
+        user_id=user["id"],
+        amount_usdt=ONE_MONTH_PRICE,
+        period_months=1,
+    )
 
     text = (
-        f"💎 <b>{plan.title}</b>\n\n"
-        f"Срок: <b>{plan.months} мес.</b>\n"
-        f"Стоимость: <b>{plan.price_usdt} USDT</b>.\n\n"
-        "Нажми кнопку ниже, чтобы открыть счёт в Crypto Bot и оплатить подписку.\n"
-        "После оплаты лимиты и привилегии Premium можно будет подвязать "
-        "к твоему аккаунту (это следующий шаг — логика подписок в БД)."
+        "💎 <b>Подписка на 1 месяц</b>\n\n"
+        f"Стоимость: <b>{ONE_MONTH_PRICE} USDT</b>.\n\n"
+        "1) Нажми по ссылке ниже и оплати счёт через @CryptoBot.\n"
+        "2) Вернись в диалог и нажми кнопку «✅ Проверить оплату».\n\n"
+        f"<a href=\"{pay_url}\">👉 Оплатить через Crypto Bot</a>"
     )
 
     await message.answer(
         text,
-        reply_markup=_invoice_keyboard(pay_url),
+        reply_markup=_payment_keyboard(invoice_id, 1),
+        disable_web_page_preview=False,
     )
+
+
+@router.message(F.text == "💎 3 месяца")
+async def handle_three_months(message: Message) -> None:
+    user = await ensure_user(message.from_user)
+
+    if not is_cryptopay_configured():
+        await message.answer(
+            "⚠️ Платёж через Crypto Bot пока не настроен.\n"
+            "Добавь CRYPTOPAY_API_TOKEN в .env и перезапусти бота.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    invoice_id, pay_url = await create_invoice_usdt(
+        user_id=user["id"],
+        amount_usdt=THREE_MONTH_PRICE,
+        period_months=3,
+    )
+
+    text = (
+        "💎 <b>Подписка на 3 месяца</b>\n\n"
+        f"Стоимость: <b>{THREE_MONTH_PRICE} USDT</b>.\n\n"
+        "1) Нажми по ссылке ниже и оплати счёт через @CryptoBot.\n"
+        "2) Вернись в диалог и нажми кнопку «✅ Проверить оплату».\n\n"
+        f"<a href=\"{pay_url}\">👉 Оплатить через Crypto Bot</a>"
+    )
+
+    await message.answer(
+        text,
+        reply_markup=_payment_keyboard(invoice_id, 3),
+        disable_web_page_preview=False,
+    )
+
+
+@router.message(F.text == "💎 12 месяцев")
+async def handle_twelve_months(message: Message) -> None:
+    user = await ensure_user(message.from_user)
+
+    if not is_cryptopay_configured():
+        await message.answer(
+            "⚠️ Платёж через Crypto Bot пока не настроен.\n"
+            "Добавь CRYPTOPAY_API_TOKEN в .env и перезапусти бота.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    invoice_id, pay_url = await create_invoice_usdt(
+        user_id=user["id"],
+        amount_usdt=TWELVE_MONTH_PRICE,
+        period_months=12,
+    )
+
+    text = (
+        "💎 <b>Подписка на 12 месяцев</b>\n\n"
+        f"Стоимость: <b>{TWELVE_MONTH_PRICE} USDT</b>.\n\n"
+        "1) Нажми по ссылке ниже и оплати счёт через @CryptoBot.\n"
+        "2) Вернись в диалог и нажми кнопку «✅ Проверить оплату».\n\n"
+        f"<a href=\"{pay_url}\">👉 Оплатить через Crypto Bot</a>"
+    )
+
+    await message.answer(
+        text,
+        reply_markup=_payment_keyboard(invoice_id, 12),
+        disable_web_page_preview=False,
+    )
+
+
+@router.callback_query(F.data.startswith("check_invoice:"))
+async def check_invoice_callback(callback: CallbackQuery) -> None:
+    """
+    Обработка кнопки «Проверить оплату».
+    Формат callback_data: "check_invoice
