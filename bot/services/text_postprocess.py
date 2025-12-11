@@ -1,50 +1,23 @@
-import re
+from __future__ import annotations
 
 
-def _clean_weird_symbols(text: str) -> str:
-    """Убираем странные символы из ответа модели."""
-    return text.replace("�", " ")
-
-
-def _normalise_newlines(text: str) -> str:
+def clean_llm_answer(text: str) -> str:
     """
-    Нормализуем переносы строк:
-    - \r\n и \r → \n
-    - более двух подряд → максимум два
+    Простая пост-обработка ответа модели:
+    - убираем лидирующие/хвостовые пробелы
+    - иногда модели любят начинать с ```markdown — режем это.
     """
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    text = text.strip()
 
+    fence = "```"
+    if text.startswith(fence):
+        # убираем первую строку ```markdown / ```json / ```
+        parts = text.splitlines()
+        # удаляем первую строку
+        parts = parts[1:]
+        # если в конце тоже есть ``` — убираем
+        if parts and parts[-1].strip() == fence:
+            parts = parts[:-1]
+        text = "\n".join(parts).strip()
 
-def _apply_headings(text: str) -> str:
-    """
-    Преобразуем строки вида "Что-то:" в жирный заголовок:
-    "Причины:" → "**Причины**"
-    """
-    lines = text.split("\n")
-    result_lines = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped and stripped.endswith(":") and not stripped.startswith("•"):
-            result_lines.append(f"**{stripped[:-1]}**")
-        else:
-            result_lines.append(line)
-    return "\n".join(result_lines)
-
-
-def prepare_answer(raw: str) -> str:
-    """
-    Базовая предобработка текста перед отправкой пользователю.
-
-    - чистим артефакты
-    - приводим переносы строк к аккуратному виду
-    - нормализуем маркеры списков
-    - делаем заголовки жирными
-    """
-    text = _clean_weird_symbols(raw)
-    text = _normalise_newlines(text)
-    # заменяем "-", "•" в начале строк на единый маркер "• "
-    text = re.sub(r"(?m)^\s*[-•]\s*", "• ", text)
-    text = _apply_headings(text)
     return text
