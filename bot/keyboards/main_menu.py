@@ -5,17 +5,15 @@ from .common import BACK_BUTTON_TEXT
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     """
-    Главное меню.
-
-    Структура:
-    - 🧠 Режимы
-    - 👤 Профиль      💎 Подписка
-    - 👥 Рефералы
+    Главное меню бота.
     """
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🧠 Режимы")],
-            [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="💎 Подписка")],
+            [
+                KeyboardButton(text="👤 Профиль"),
+                KeyboardButton(text="💎 Подписка"),
+            ],
             [KeyboardButton(text="👥 Рефералы")],
         ],
         resize_keyboard=True,
@@ -25,14 +23,11 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 
 def modes_keyboard() -> ReplyKeyboardMarkup:
     """
-    Меню выбора режима работы ассистента.
+    Меню выбора режимов работы ассистента.
 
-    Оставляем только два режима:
-    - 🧠 Универсальный   — DeepSeek без web-поиска
-    - 💼 Профессиональный — умный режим (переключается между DeepSeek и Perplexity)
-
-    Наставник + Медицина теперь живут внутри "Профессионального" режима,
-    поэтому отдельные кнопки убираем.
+    Теперь только два режима:
+    - 🧠 Универсальный — обычный режим на DeepSeek.
+    - 💼 Профессиональный — умный режим с возможностью web-поиска (Perplexity и т.п.).
     """
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -63,4 +58,16 @@ def subscription_keyboard() -> ReplyKeyboardMarkup:
 
 def profile_keyboard() -> ReplyKeyboardMarkup:
     """
-    Пока профиль — это заглушка.
+    Пока отдельного подменю нет — возвращаем главное меню.
+    """
+    return main_menu_keyboard()
+
+
+def referrals_keyboard() -> ReplyKeyboardMarkup:
+    """
+    Простое меню для раздела «Рефералы».
+    """
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=BACK_BUTTON_TEXT)]],
+        resize_keyboard=True,
+    )
