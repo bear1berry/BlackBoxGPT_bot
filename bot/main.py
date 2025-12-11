@@ -1,39 +1,46 @@
+from __future__ import annotations
+
 import asyncio
 import logging
+import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
 
 from .config import settings
+from .db.db import db
 from .routers import setup_routers
-from .db import db
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stdout,
+)
+log = logging.getLogger(__name__)
 
 
 async def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    if not settings.bot_token:
+        raise RuntimeError("BOT_TOKEN is not set in .env")
+
+    await db.connect()
+    log.info("Database pool initialised")
 
     bot = Bot(
         token=settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
+        default=DefaultBotProperties(parse_mode="HTML"),
     )
-    dp = Dispatcher(storage=MemoryStorage())
-    setup_routers(dp)
-
-    await db.connect()
-    logging.getLogger(__name__).info("Database pool initialised")
+    dp = Dispatcher()
+    dp.include_router(setup_routers())
 
     try:
+        log.info("Starting polling")
         await bot.delete_webhook(drop_pending_updates=True)
-        logging.getLogger(__name__).info("Starting polling")
         await dp.start_polling(bot)
     finally:
         await db.close()
-        logging.getLogger(__name__).info("Database pool closed")
+        log.info("Database pool closed")
 
 
 if __name__ == "__main__":
