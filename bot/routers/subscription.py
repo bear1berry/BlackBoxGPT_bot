@@ -138,4 +138,57 @@ async def _create_cryptobot_invoice(
 
     # ⚠️ Здесь мы пока НЕ пишем ничего в БД.
     # На следующем шаге можно:
-    # - сохранить invoice_id в_
+    # - сохранить invoice_id в таблицу payments
+    # - проверять оплату по invoice_id через /getInvoices
+    # - при успешной оплате создавать/продлевать подписку в subscriptions.
+    return pay_url
+
+
+@router.message(F.text.in_(PLANS.keys()))
+async def handle_plan_choice(message: Message) -> None:
+    """
+    Обработка выбора конкретного тарифа (1 / 3 / 12 месяцев).
+    """
+    plan = PLANS[message.text]
+
+    # Если токен CryptoBot не задан — честно говорим об этом.
+    if not settings.cryptopay_api_token:
+        await message.answer(
+            "⚠️ Платёж через Crypto Bot пока не настроен.\n\n"
+            "Технически всё готово — добавь токен Crypto Pay в <code>.env</code> "
+            "в переменную <code>CRYPTOPAY_API_TOKEN</code> и перезапусти бота.\n\n"
+            "После этого здесь будет появляться ссылка на инвойс для оплаты.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    # Убеждаемся, что пользователь есть в нашей БД (создаём, если нужно)
+    await ensure_user(message.from_user)
+
+    try:
+        pay_url = await _create_cryptobot_invoice(
+            user_tg_id=message.from_user.id,
+            plan=plan,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Failed to create CryptoBot invoice: %s", e)
+        await message.answer(
+            "⚠️ Не получилось создать инвойс в Crypto Bot.\n"
+            "Попробуй ещё раз чуть позже или напиши администратору.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    text = (
+        f"💎 <b>{plan.title}</b>\n\n"
+        f"Срок: <b>{plan.months} мес.</b>\n"
+        f"Стоимость: <b>{plan.price_usdt} USDT</b>.\n\n"
+        "Нажми кнопку ниже, чтобы открыть счёт в Crypto Bot и оплатить подписку.\n"
+        "После оплаты лимиты и привилегии Premium можно будет подвязать "
+        "к твоему аккаунту (это следующий шаг — логика подписок в БД)."
+    )
+
+    await message.answer(
+        text,
+        reply_markup=_invoice_keyboard(pay_url),
+    )
