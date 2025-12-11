@@ -1,62 +1,62 @@
-import asyncio
+from __future__ import annotations
 
 from aiogram import Router, F
 from aiogram.types import Message
 
-from ..services.storage import ensure_user, get_current_mode
-from ..services.llm import llm_client, infer_style_from_text
-from ..services.analytics import increment_usage, estimate_tokens
+from ..db.db import db
+from ..services.storage import ensure_user
+from ..services.llm import llm_client, Mode
+from ..services.analytics import add_usage_stat
+from ..services.usage_limits import check_message_limit
+from ..keyboards.main_menu import subscription_keyboard
 
-router = Router(name="chat")
-
-_MENU_TEXTS = {
-    "🧠 Режимы",
-    "👤 Профиль",
-    "💎 Подписка",
-    "👥 Рефералы",
-    "⬅️ Назад",
-    "🧠 Универсальный",
-    "💼 Профессиональный",
-    "🔥 Наставник",
-    "🩺 Медицина",
-    "💎 1 месяц",
-    "💎 3 месяца",
-    "💎 12 месяцев",
-}
+router = Router()
 
 
-@router.message(F.text)
-async def handle_chat(message: Message) -> None:
-    if not message.text:
-        return
-    if message.text.startswith("/"):
-        return
-    if message.text in _MENU_TEXTS:
-        return
+async def _get_user_mode(user_id: int) -> Mode:
+    row = await db.fetchrow(
+        "SELECT current_mode FROM users WHERE id = $1",
+        user_id,
+    )
+    if not row:
+        return Mode.UNIVERSAL
 
-    tg_user = message.from_user
-    user = await ensure_user(tg_user)
-    mode = await get_current_mode(user)
-    style = infer_style_from_text(message.text)
-
-    thinking_msg = await message.answer("⏳ Думаю над ответом...")
-
+    raw = row["current_mode"] or "universal"
     try:
-        parts = []
-        async for chunk in llm_client.ask_stream(
-            user_prompt=message.text,
-            mode=mode,
-            style=style,
-        ):
-            parts.append(chunk)
-            await thinking_msg.edit_text("".join(parts))
-            await asyncio.sleep(0.05)
+        return Mode(raw)
+    except ValueError:
+        return Mode.UNIVERSAL
 
-        full_text = "".join(parts)
-        tokens_used = estimate_tokens(full_text)
-        await increment_usage(user["id"], tokens_used)
-    except Exception:
-        await thinking_msg.edit_text(
+
+@router.message(F.text, ~F.text.startswith("/"))
+async def handle_chat(message: Message) -> None:
+    # 1. Гарантируем, что пользователь есть в БД
+    user_row = await ensure_user(message.from_user)
+
+    # 2. Проверяем лимиты (бесплатный / Premium)
+    ok, limit_text = await check_message_limit(user_row["id"])
+    if not ok:
+        # Лимит превышен — показываем текст + предлагаем оформить подписку
+        await message.answer(limit_text, reply_markup=subscription_keyboard)
+        return
+
+    # 3. Определяем текущий режим (универсальный / профессиональный)
+    mode = await _get_user_mode(user_row["id"])
+
+    # 4. Запрашиваем ответ у LLM (стримингом внутри клиента)
+    chunks: list[str] = []
+    async for part in llm_client.ask_stream(message.text, mode):
+        chunks.append(part)
+
+    answer = "".join(chunks).strip()
+    if not answer:
+        await message.answer(
             "⚠️ Произошла ошибка при обращении к модели.\n"
-            "Попробуй ещё раз чуть позже или измени формулировку запроса."
+            "Попробуй ещё раз немного позже."
         )
+        return
+
+    await message.answer(answer)
+
+    # 5. Фиксируем факт использования (для статистики и лимитов)
+    await add_usage_stat(user_row["id"], tokens_used=0)
