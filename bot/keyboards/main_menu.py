@@ -1,9 +1,17 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
-BACK_BUTTON_TEXT = "⬅️ Назад"
+from .common import BACK_BUTTON_TEXT
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    """
+    Главное меню.
+
+    Структура:
+    - 🧠 Режимы
+    - 👤 Профиль      💎 Подписка
+    - 👥 Рефералы
+    """
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🧠 Режимы")],
@@ -16,6 +24,16 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 
 
 def modes_keyboard() -> ReplyKeyboardMarkup:
+    """
+    Меню выбора режима работы ассистента.
+
+    Оставляем только два режима:
+    - 🧠 Универсальный   — DeepSeek без web-поиска
+    - 💼 Профессиональный — умный режим (переключается между DeepSeek и Perplexity)
+
+    Наставник + Медицина теперь живут внутри "Профессионального" режима,
+    поэтому отдельные кнопки убираем.
+    """
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🧠 Универсальный")],
@@ -28,6 +46,9 @@ def modes_keyboard() -> ReplyKeyboardMarkup:
 
 
 def subscription_keyboard() -> ReplyKeyboardMarkup:
+    """
+    Меню выбора срока подписки.
+    """
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="💎 1 месяц")],
@@ -41,11 +62,5 @@ def subscription_keyboard() -> ReplyKeyboardMarkup:
 
 
 def profile_keyboard() -> ReplyKeyboardMarkup:
-    return main_menu_keyboard()
-
-
-def referrals_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=BACK_BUTTON_TEXT)]],
-        resize_keyboard=True,
-    )
+    """
+    Пока профиль — это заглушка.
