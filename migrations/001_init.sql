@@ -1,78 +1,52 @@
--- Пользователи
+-- Миграция для создания таблиц
+
 CREATE TABLE IF NOT EXISTS users (
-    id              BIGSERIAL PRIMARY KEY,
-    telegram_id     BIGINT UNIQUE NOT NULL,
-    username        TEXT,
-    first_name      TEXT,
-    last_name       TEXT,
-    referral_code   TEXT UNIQUE,
-    referrer_id     BIGINT REFERENCES users(id),
-
-    current_mode    TEXT NOT NULL DEFAULT 'universal',
-
-    is_premium      BOOLEAN NOT NULL DEFAULT FALSE,
-    premium_until   TIMESTAMPTZ,
-
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    user_id BIGINT PRIMARY KEY,
+    username TEXT,
+    full_name TEXT,
+    registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    current_mode TEXT DEFAULT 'universal',
+    style_formality INTEGER DEFAULT 50,
+    style_emotionality INTEGER DEFAULT 50,
+    style_verbosity INTEGER DEFAULT 50
 );
 
--- Подписки
 CREATE TABLE IF NOT EXISTS subscriptions (
-    id          BIGSERIAL PRIMARY KEY,
-    user_id     BIGINT NOT NULL REFERENCES users(id),
-    plan_code   TEXT NOT NULL,
-    started_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at  TIMESTAMPTZ NOT NULL,
-    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
-    payment_id  BIGINT
+    user_id BIGINT PRIMARY KEY REFERENCES users(user_id),
+    is_premium BOOLEAN DEFAULT FALSE,
+    subscription_expires_at TIMESTAMP
 );
 
--- Рефералка (бонусы можно расширить позже)
 CREATE TABLE IF NOT EXISTS referrals (
-    id           BIGSERIAL PRIMARY KEY,
-    referrer_id  BIGINT NOT NULL REFERENCES users(id),
-    referee_id   BIGINT NOT NULL REFERENCES users(id),
-    reward_type  TEXT NOT NULL,
-    reward_value INTEGER NOT NULL DEFAULT 0,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    referral_id SERIAL PRIMARY KEY,
+    referrer_id BIGINT REFERENCES users(user_id),
+    referred_id BIGINT REFERENCES users(user_id),
+    referral_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Платежи Crypto Pay
 CREATE TABLE IF NOT EXISTS payments (
-    id         BIGSERIAL PRIMARY KEY,
-    user_id    BIGINT NOT NULL REFERENCES users(id),
-    invoice_id BIGINT NOT NULL,
-    plan_code  TEXT NOT NULL,
-    amount     NUMERIC(18,8) NOT NULL,
-    asset      TEXT NOT NULL,
-    status     TEXT NOT NULL,
-    pay_url    TEXT NOT NULL,
-    raw        JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    paid_at    TIMESTAMPTZ
+    payment_id SERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(user_id),
+    amount NUMERIC(10, 2),
+    currency TEXT,
+    status TEXT,
+    invoice_id TEXT,
+    payment_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Статистика использования (лимиты)
 CREATE TABLE IF NOT EXISTS usage_stats (
-    user_id       BIGINT NOT NULL REFERENCES users(id),
-    day           DATE   NOT NULL,
-    request_count INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (user_id, day)
+    user_id BIGINT REFERENCES users(user_id),
+    date DATE DEFAULT CURRENT_DATE,
+    request_count INTEGER DEFAULT 0,
+    token_count INTEGER DEFAULT 0,
+    PRIMARY KEY (user_id, date)
 );
 
--- updated_at триггер
-CREATE OR REPLACE FUNCTION set_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS trg_users_set_updated_at ON users;
-
-CREATE TRIGGER trg_users_set_updated_at
-    BEFORE UPDATE ON users
-    FOR EACH ROW
-    EXECUTE FUNCTION set_updated_at();
+CREATE TABLE IF NOT EXISTS dialogs (
+    dialog_id SERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(user_id),
+    message TEXT,
+    response TEXT,
+    tokens_used INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
