@@ -1,72 +1,42 @@
-from __future__ import annotations
-
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
-from ..config import settings
-from ..keyboards.main_menu import subscription_keyboard
-from ..services.llm import Mode, ask_llm
-from ..services.payments_crypto import refresh_user_payments_and_subscriptions
-from ..services.storage import (
-    ensure_user,
-    get_usage_today,
-    increment_usage,
-    get_user_mode,
-    sync_user_premium_flag,
-)
+from bot.services.llm import LLMClient
+from bot.services.text_postprocess import prepare_answer
 
 router = Router()
 
+# Определяем состояния
+class ChatState(StatesGroup):
+    waiting_for_message = State()
 
-@router.message(F.text & ~F.text.in_(
-    {
-        "🧠 Режимы",
-        "👤 Профиль",
-        "💎 Подписка",
-        "👥 Рефералы",
-        "🧠 Универсальный",
-        "💼 Профессиональный",
-        "💎 1 месяц",
-        "💎 3 месяца",
-        "💎 12 месяцев",
-        "⬅️ Назад",
-        "🔄 Проверить оплату",
-    }
-))
-async def handle_chat(message: Message) -> None:
-    # 1. Убедиться, что юзер есть в БД
-    user_row = await ensure_user(message.from_user)
+llm_client = LLMClient()
 
-    # 2. Проверяем оплаты и подписки
-    await refresh_user_payments_and_subscriptions(user_row["id"])
-    user_row = await sync_user_premium_flag(user_row["id"])
-
-    # 3. Лимиты
-    limit = settings.premium_daily_limit if user_row["is_premium"] else settings.free_daily_limit
-    used = await get_usage_today(user_row["id"])
-
-    if used >= limit:
-        if user_row["is_premium"]:
-            text = (
-                "🚫 Ты уже использовал дневной лимит Premium (100 запросов).\n"
-                "Вернись завтра — лимит обновится."
-            )
-            await message.answer(text)
-        else:
-            text = (
-                "🚫 Бесплатный лимит (10 запросов в день) исчерпан.\n\n"
-                "Оформи подписку Premium, чтобы получить до 100 запросов в день и приоритетные ответы."
-            )
-            await message.answer(text, reply_markup=subscription_keyboard())
-        return
-
-    # 4. Увеличиваем счётчик
-    await increment_usage(user_row["id"])
-
-    # 5. Определяем режим
-    mode = await get_user_mode(user_row["id"])
-
-    # 6. Запрос к LLM
-    result = await ask_llm(message.text, mode=mode)
-
-    await message.answer(result.text)
+@router.message()
+async def handle_message(message: Message, state: FSMContext):
+    # Если пользователь ввел текст, обрабатываем его
+    if message.text and message.text not in ["🧠 Режимы", "👤 Профиль", "💎 Подписка", "👥 Рефералы", "⬅️ Назад"]:
+        # Устанавливаем состояние, чтобы в будущем можно было обрабатывать диалог
+        await state.set_state(ChatState.waiting_for_message)
+        
+        # Отправляем сообщение о том, что бот думает
+        thinking_msg = await message.answer("🤔 Думаю над ответом...")
+        
+        # Получаем ответ от LLM
+        response_text = ""
+        try:
+            # В данном примере используем не потоковый ответ, но можно переделать на потоковый
+            response_text = await llm_client.ask(message.text, mode="universal")
+        except Exception as e:
+            response_text = f"Произошла ошибка при получении ответа: {e}"
+        
+        # Обрабатываем ответ (очистка, форматирование)
+        processed_text = prepare_answer(response_text)
+        
+        # Отправляем обработанный ответ
+        await thinking_msg.edit_text(processed_text)
+        
+        # Сбрасываем состояние
+        await state.clear()
