@@ -1,10 +1,9 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
-BACK_BUTTON_TEXT = "⬅️ Назад"
-
-
-def back_keyboard() -> ReplyKeyboardMarkup:
+def get_back_keyboard():
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=BACK_BUTTON_TEXT)]],
-        resize_keyboard=True,
+        keyboard=[
+            [KeyboardButton(text="⬅️ Назад")]
+        ],
+        resize_keyboard=True
     )
