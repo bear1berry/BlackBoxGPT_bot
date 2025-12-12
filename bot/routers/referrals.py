@@ -1,40 +1,21 @@
-from aiogram import Router, F
+from aiogram import Router
 from aiogram.types import Message
+from aiogram.filters import Text
 
-from ..keyboards import referrals_keyboard
-from ..services.storage import get_user_by_telegram_id
-from ..db import db
+from bot.keyboards.common import get_back_keyboard
 
-router = Router(name="referrals")
+router = Router()
 
-
-@router.message(F.text == "👥 Рефералы")
-async def show_referrals(message: Message) -> None:
-    user = await get_user_by_telegram_id(message.from_user.id)
-    if not user:
-        await message.answer("Не нашёл твой профиль, отправь /start.", reply_markup=referrals_keyboard())
-        return
-
-    me = await message.bot.get_me()
-    referral_code = user["referral_code"]
-    ref_link = f"https://t.me/{me.username}?start=ref_{referral_code}"
-
-    total_invited = await db.fetchval(
-        "SELECT COUNT(*) FROM referrals WHERE referrer_id=$1",
-        user["id"],
+@router.message(Text("👥 Рефералы"))
+async def show_referrals(message: Message):
+    # Заглушка: реферальная информация
+    referrals_text = (
+        "👥 *Реферальная программа*\n\n"
+        "Приглашай друзей и получай бонусы!\n\n"
+        "Твоя реферальная ссылка:\n"
+        "`https://t.me/BlackBoxGPT_bot?start=ref12345`\n\n"
+        "Приглашено пользователей: 0\n"
+        "Из них Premium: 0\n"
+        "Твой бонус: 0 дней подписки"
     )
-    premium_invited = await db.fetchval(
-        "SELECT COUNT(*) FROM users WHERE referrer_id=$1 AND is_premium = TRUE",
-        user["id"],
-    )
-
-    text = (
-        "👥 **Реферальная программа**\n\n"
-        f"Твой реф-код: `{referral_code}`\n"
-        f"Твоя ссылка для приглашений:\n{ref_link}\n\n"
-        f"Всего приглашено: **{total_invited or 0}**\n"
-        f"Из них с Premium: **{premium_invited or 0}**\n\n"
-        "🔹 За друзей можно начислять бонусы: дни подписки, доп. лимиты, скидки.\n"
-        "Логику бонусов легко донастроить в коде."
-    )
-    await message.answer(text, reply_markup=referrals_keyboard())
+    await message.answer(referrals_text, reply_markup=get_back_keyboard(), parse_mode="Markdown")
