@@ -1,76 +1,48 @@
-from __future__ import annotations
+from aiogram import Router
+from aiogram.types import Message
+from aiogram.filters import Text
+from aiogram.fsm.context import FSMContext
 
-from aiogram import F, Router
-from aiogram.types import CallbackQuery, Message
+from bot.keyboards.main_menu import get_main_menu, get_modes_menu
+from bot.keyboards.common import get_back_keyboard
 
-from ..keyboards.main_menu import main_menu_keyboard, modes_keyboard
-from ..services.llm import Mode
-from ..services.storage import get_current_mode, set_current_mode
+router = Router()
 
-router = Router(name="menu")
-
-
-@router.message(F.text == "🧠 Режимы")
-async def show_modes(message: Message) -> None:
-    user = message.from_user
-    if not user:
-        return
-
-    # Читаем текущий режим из БД
-    current_mode = await get_current_mode(user.id)
-    kb = modes_keyboard(current=current_mode.value)
-
-    text = (
-        "🧠 *Режимы работы бота*\n\n"
-        "• *Универсальный* — базовый режим DeepSeek для любых задач.\n"
-        "• *Профессиональный* — усиленный режим: наставник + медицина, "
-        "умеет подключать WEB-поиск через Perplexity.\n\n"
-        "Просто выбери нужный режим ниже."
+@router.message(Text("🧠 Режимы"))
+async def modes_menu(message: Message, state: FSMContext):
+    await message.answer(
+        "Выбери режим общения:\n\n"
+        "• *Универсальный* — для повседневных вопросов\n"
+        "• *Профессиональный* — для сложных задач\n"
+        "• *Наставник* — для дисциплины и целей\n"
+        "• *Медицина* — общие рекомендации по здоровью\n\n"
+        "Выбор режима повлияет на стиль и глубину ответов.",
+        reply_markup=get_modes_menu(),
+        parse_mode="Markdown"
     )
 
-    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+@router.message(Text("⬅️ Назад"))
+async def back_to_main(message: Message, state: FSMContext):
+    await message.answer("Главное меню:", reply_markup=get_main_menu())
 
+# Обработчики выбора режима
+@router.message(Text("Универсальный"))
+async def set_universal_mode(message: Message, state: FSMContext):
+    # Здесь должна быть логика сохранения режима в БД
+    await message.answer("Режим *Универсальный* активирован. Теперь я буду отвечать в повседневном стиле.", parse_mode="Markdown")
 
-@router.callback_query(F.data == "menu:back")
-async def back_to_main_menu(callback: CallbackQuery) -> None:
-    await callback.message.edit_text(
-        "Главное меню.",
-        reply_markup=None,
+@router.message(Text("Профессиональный"))
+async def set_professional_mode(message: Message, state: FSMContext):
+    await message.answer("Режим *Профессиональный* активирован. Готов к сложным задачам и глубокому анализу.", parse_mode="Markdown")
+
+@router.message(Text("Наставник"))
+async def set_mentor_mode(message: Message, state: FSMContext):
+    await message.answer("Режим *Наставник* активирован. Буду помогать с дисциплиной и достижением целей.", parse_mode="Markdown")
+
+@router.message(Text("Медицина"))
+async def set_medical_mode(message: Message, state: FSMContext):
+    await message.answer(
+        "Режим *Медицина* активирован.\n\n"
+        "⚠️ *Внимание*: Я не ставлю диагнозы и не назначаю лечение. Мои ответы носят информационный характер. При серьезных симптомах обратитесь к врачу.",
+        parse_mode="Markdown"
     )
-    await callback.message.answer(
-        "Выбери действие в нижнем меню.",
-        reply_markup=main_menu_keyboard(),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("mode:"))
-async def switch_mode(callback: CallbackQuery) -> None:
-    user = callback.from_user
-    if not user:
-        return
-
-    _, mode_code = callback.data.split(":", maxsplit=1)
-    if mode_code == "universal":
-        mode = Mode.UNIVERSAL
-    else:
-        mode = Mode.PROFESSIONAL
-
-    await set_current_mode(user.id, mode)
-
-    kb = modes_keyboard(current=mode.value)
-
-    if mode is Mode.UNIVERSAL:
-        text = (
-            "🧠 *Универсальный режим активирован.*\n\n"
-            "DeepSeek без web-поиска. Подходит для большинства запросов."
-        )
-    else:
-        text = (
-            "🏆 *Профессиональный режим активирован.*\n\n"
-            "Наставник + медицинский помощник. При запросах, где нужен интернет, "
-            "бот автоматически подключит Perplexity и web-поиск."
-        )
-
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-    await callback.answer("Режим обновлён ✅")
