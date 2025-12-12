@@ -1,47 +1,38 @@
-from __future__ import annotations
-
 import asyncio
 import logging
-import sys
-
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
 
-from .config import settings
-from .db.db import db
-from .routers import setup_routers
-
+from bot.config import settings
+from bot.routers import start, menu, profile, subscription, referrals, chat
+from bot.db.db import init_db
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    stream=sys.stdout,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
+async def main():
+    # Инициализация базы данных
+    await init_db()
 
-async def main() -> None:
-    if not settings.bot_token:
-        raise RuntimeError("BOT_TOKEN is not set in .env")
+    # Инициализация бота и диспетчера
+    bot = Bot(token=settings.BOT_TOKEN.get_secret_value(), parse_mode=ParseMode.MARKDOWN)
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
 
-    await db.connect()
-    log.info("Database pool initialised")
+    # Регистрация роутеров
+    dp.include_router(start.router)
+    dp.include_router(menu.router)
+    dp.include_router(profile.router)
+    dp.include_router(subscription.router)
+    dp.include_router(referrals.router)
+    dp.include_router(chat.router)
 
-    bot = Bot(
-        token=settings.bot_token,
-        default=DefaultBotProperties(parse_mode="HTML"),
-    )
-    dp = Dispatcher()
-    dp.include_router(setup_routers())
-
-    try:
-        log.info("Starting polling")
-        await bot.delete_webhook(drop_pending_updates=True)
-        await dp.start_polling(bot)
-    finally:
-        await db.close()
-        log.info("Database pool closed")
-
+    # Запуск поллинга
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
