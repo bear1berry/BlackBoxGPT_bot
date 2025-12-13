@@ -213,4 +213,3 @@ async def chat_voice(message: Message, db, settings, orchestrator, cryptopay=Non
 @router.message(lambda m: m.text and not m.text.startswith("/"))
 async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
     await _run_llm_flow(message, db, settings, orchestrator, message.text or "")
-PY

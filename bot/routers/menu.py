@@ -165,4 +165,3 @@ async def toggle_checkin(message: Message, db) -> None:
     new_val = await users_repo.toggle_checkin(db, message.from_user.id)
     status = "Вкл ✅" if new_val else "Выкл ❌"
     await message.answer(f"🫂 Ежедневный чек-ин: <b>{status}</b>", reply_markup=kb_profile())
-PY

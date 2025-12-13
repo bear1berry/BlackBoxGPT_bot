@@ -41,6 +41,7 @@ cp .env.example .env
 
 Открой `.env` и заполни:
 - `BOT_TOKEN`, `BOT_USERNAME`
+- `LOG_LEVEL` (опционально, INFO/WARNING/ERROR)
 - `DEEPSEEK_API_KEY`
 - `PERPLEXITY_API_KEY` (если нужен WEB)
 - `CRYPTOPAY_API_TOKEN`

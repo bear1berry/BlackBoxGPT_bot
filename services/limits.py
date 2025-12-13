@@ -1,4 +1,3 @@
-cat > services/limits.py <<'PY'
 from __future__ import annotations
 
 import time
@@ -99,4 +98,3 @@ async def consume(
 
     await users_repo.bump_trial_used(db, user_id, 1)
     return LimitResult(ok=True, reason=None)
-PY

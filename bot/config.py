@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     bot_token: str = Field(alias="BOT_TOKEN")
     bot_username: str = Field(alias="BOT_USERNAME")
 
+    # Logging
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+
     # Timezone
     timezone: str = Field(default="Europe/Moscow", alias="TIMEZONE")
 
