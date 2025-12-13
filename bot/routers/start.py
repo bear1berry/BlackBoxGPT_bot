@@ -14,9 +14,6 @@ router = Router()
 
 @router.message(CommandStart(deep_link=True))
 async def cmd_start(message: Message) -> None:
-    bot = message.bot
-    db = bot["db"]
-    settings = bot["settings"]
 
     ref_code = (message.text or "").split(maxsplit=1)[1].strip() if len((message.text or "").split()) > 1 else ""
     referrer_id = None
