@@ -31,7 +31,7 @@ def _strip_tags(html: str) -> str:
 
 
 @router.message(lambda m: m.text and not m.text.startswith("/"))
-async def chat(message: Message, db, settings, orchestrator):
+async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
     # используешь db/settings/orchestrator напрямую
 
     # ensure user exists
