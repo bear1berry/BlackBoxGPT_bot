@@ -8,13 +8,11 @@ from bot.keyboards import kb_main
 from bot import texts
 from services import users as users_repo
 
-
 router = Router()
 
 
 @router.message(CommandStart(deep_link=True))
-async def cmd_start(message: Message) -> None:
-
+async def cmd_start(message: Message, db, settings) -> None:
     ref_code = (message.text or "").split(maxsplit=1)[1].strip() if len((message.text or "").split()) > 1 else ""
     referrer_id = None
     if ref_code:
