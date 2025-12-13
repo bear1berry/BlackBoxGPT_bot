@@ -92,3 +92,54 @@ async def open_referrals(message: Message, db, settings) -> None:
 @router.message(lambda m: m.text == BTN_SUBSCRIPTION)
 async def open_subscription(message: Message, settings) -> None:
     txt = texts.SUBSCRIPTION_MENU_TEXT.format(
+        price_1m=f"{settings.price_1m:.2f}",
+        price_3m=f"{settings.price_3m:.2f}",
+        price_12m=f"{settings.price_12m:.2f}",
+    )
+    await message.answer(txt, reply_markup=kb_subscription())
+
+
+@router.message(lambda m: m.text in (BTN_SUB_1M, BTN_SUB_3M, BTN_SUB_12M))
+async def create_invoice(message: Message, db, settings, cryptopay) -> None:
+    months = 1 if message.text == BTN_SUB_1M else 3 if message.text == BTN_SUB_3M else 12
+    amount = settings.price_1m if months == 1 else settings.price_3m if months == 3 else settings.price_12m
+
+    inv = await payments_service.create_subscription_invoice(
+        db,
+        cryptopay,
+        user_id=message.from_user.id,
+        months=months,
+        amount_usdt=float(amount),
+    )
+
+    pay_url = inv.bot_invoice_url or ""
+    await message.answer(texts.PAYMENT_CREATED + f"\n\n🔗 {pay_url}", reply_markup=kb_subscription())
+
+
+@router.message(lambda m: m.text == BTN_MODE_UNIVERSAL)
+async def set_universal(message: Message, db) -> None:
+    await users_repo.set_mode(db, message.from_user.id, "universal")
+    await message.answer("✅ Режим: <b>Универсальный</b>", reply_markup=kb_main())
+
+
+@router.message(lambda m: m.text == BTN_MODE_PRO)
+async def set_pro(message: Message, db) -> None:
+    await users_repo.set_mode(db, message.from_user.id, "pro")
+    await message.answer("✅ Режим: <b>Профессиональный</b>", reply_markup=kb_main())
+
+
+@router.message(lambda m: m.text == BTN_RENEW)
+async def renew(message: Message, settings) -> None:
+    await open_subscription(message, settings=settings)
+
+
+@router.message(lambda m: m.text == BTN_INVITE)
+async def invite(message: Message, db, settings) -> None:
+    await open_referrals(message, db=db, settings=settings)
+
+
+@router.message(lambda m: m.text == BTN_CHECKIN_TOGGLE)
+async def toggle_checkin(message: Message, db) -> None:
+    new_val = await users_repo.toggle_checkin(db, message.from_user.id)
+    status = "Вкл ✅" if new_val else "Выкл ❌"
+    await message.answer(f"🫂 Ежедневный чек-ин: <b>{status}</b>", reply_markup=kb_profile())
