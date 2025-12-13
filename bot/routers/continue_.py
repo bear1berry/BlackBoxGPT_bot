@@ -13,9 +13,6 @@ router = Router()
 
 @router.callback_query(lambda c: c.data and c.data.startswith("cont:"))
 async def cont(cb: CallbackQuery) -> None:
-    bot = cb.bot
-    db = bot["db"]
-    token = cb.data.split(":", 1)[1]
 
     st = await cont_repo.get(db, token)
     if not st or st.user_id != cb.from_user.id:
