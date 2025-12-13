@@ -1,0 +1,20 @@
+[Unit]
+Description=BlackBoxGPT Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/BlackBoxGPT_bot
+EnvironmentFile=/home/ubuntu/BlackBoxGPT_bot/.env
+ExecStart=/home/ubuntu/BlackBoxGPT_bot/venv/bin/python -m bot.main
+Restart=always
+RestartSec=3
+
+# Hardening (optional)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
