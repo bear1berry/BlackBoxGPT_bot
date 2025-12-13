@@ -7,12 +7,16 @@ from aiogram.exceptions import TelegramBadRequest
 from bot.keyboards import ikb_continue
 from services import continues as cont_repo
 
-
 router = Router()
 
 
 @router.callback_query(lambda c: c.data and c.data.startswith("cont:"))
-async def cont(cb: CallbackQuery) -> None:
+async def cont(cb: CallbackQuery, db) -> None:
+    data = cb.data or ""
+    token = data.split(":", 1)[1] if ":" in data else ""
+    if not token:
+        await cb.answer()
+        return
 
     st = await cont_repo.get(db, token)
     if not st or st.user_id != cb.from_user.id:
@@ -33,11 +37,9 @@ async def cont(cb: CallbackQuery) -> None:
             pass
         return
 
-    # update idx
     await cont_repo.bump(db, token)
 
     text = st.parts[next_idx]
-    # remove button from previous message
     try:
         await cb.message.edit_reply_markup(reply_markup=None)
     except TelegramBadRequest:
@@ -45,7 +47,6 @@ async def cont(cb: CallbackQuery) -> None:
     except Exception:
         pass
 
-    # send next part
     if next_idx == len(st.parts) - 1:
         await cb.message.answer(text)
         await cont_repo.delete(db, token)
