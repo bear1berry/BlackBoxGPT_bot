@@ -2,25 +2,28 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from contextlib import suppress
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums.parse_mode import ParseMode
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiohttp import web
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from bot.config import Settings
 from bot.logging_conf import setup_logging
 from bot.routers import setup_routers
 
-from services.db import connect, apply_migrations
 from services.crypto_pay import CryptoPayClient
+from services.db import apply_migrations, connect
+from services.jobs import (
+    downgrade_expired_subscriptions,
+    send_daily_checkins,
+    sync_active_invoices,
+)
 from services.llm.openai_compat import OpenAICompatClient
 from services.llm.orchestrator import Orchestrator
-from services.jobs import sync_active_invoices, downgrade_expired_subscriptions, send_daily_checkins
 from web.app import create_app
 
 
@@ -55,24 +58,29 @@ async def main() -> None:
 
     orchestrator = Orchestrator(deepseek=deepseek, perplexity=perplexity, settings=settings)
 
-    cryptopay = CryptoPayClient(api_token=settings.cryptopay_api_token, base_url=settings.cryptopay_base_url)
+    cryptopay = CryptoPayClient(
+        api_token=settings.cryptopay_api_token,
+        base_url=settings.cryptopay_base_url,
+    )
 
     bot = Bot(
         token=settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
+        default=DefaultBotProperties(
+            parse_mode=ParseMode.HTML,
+            link_preview_is_disabled=True,
+        ),
     )
-
-    # Dependency injection via bot context
-    bot["db"] = db
-    bot["settings"] = settings
-    bot["orchestrator"] = orchestrator
-    bot["cryptopay"] = cryptopay
 
     dp = Dispatcher()
     dp.include_router(setup_routers())
 
     # Web server for CryptoPay webhook + health
-    app = create_app(bot=bot, db=db, cryptopay=cryptopay, webhook_secret=settings.cryptopay_webhook_secret)
+    app = create_app(
+        bot=bot,
+        db=db,
+        cryptopay=cryptopay,
+        webhook_secret=settings.cryptopay_webhook_secret,
+    )
     web_runner = await start_web_server(app, settings.web_server_host, settings.web_server_port)
     log.info("Web server started on %s:%s", settings.web_server_host, settings.web_server_port)
 
@@ -112,17 +120,30 @@ async def main() -> None:
 
     # Start polling
     try:
+        await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(
-    bot,
-    db=db,
-    settings=settings,
-    orchestrator=orchestrator,
-    cryptopay=cryptopay,
-)
+            bot,
+            db=db,
+            settings=settings,
+            orchestrator=orchestrator,
+            cryptopay=cryptopay,
+        )
+    finally:
+        # Graceful shutdown (чтобы systemd не ловил утечки и порт 8080 не зависал)
+        with suppress(Exception):
+            scheduler.shutdown(wait=False)
+        with suppress(Exception):
+            await web_runner.cleanup()
+        with suppress(Exception):
+            await bot.session.close()
+        with suppress(Exception):
+            await db.close()
+
 
 if __name__ == "__main__":
     with suppress(ImportError):
         import uvloop
 
         uvloop.install()
+
     asyncio.run(main())
