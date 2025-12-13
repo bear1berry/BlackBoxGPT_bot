@@ -1,4 +1,3 @@
-cat > bot/routers/chat.py <<'PY'
 from __future__ import annotations
 
 import io
