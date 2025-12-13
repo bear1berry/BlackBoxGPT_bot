@@ -42,6 +42,12 @@ def _fmt_date(ts: int, tz: str) -> str:
     return dt.strftime("%Y-%m-%d")
 
 
+async def _ensure_user(db, settings, user_id: int) -> None:
+    """Guarantee user exists before touching limits/refs/checkins."""
+    # If user already exists, ensure_user is a no-op.
+    await users_repo.ensure_user(db, user_id, referrer_id=None, ref_salt=settings.ref_salt_effective)
+
+
 @router.message(lambda m: m.text == BTN_BACK)
 async def back_to_main(message: Message) -> None:
     await message.answer("⚙️ Меню", reply_markup=kb_main())
@@ -54,10 +60,13 @@ async def open_modes(message: Message) -> None:
 
 @router.message(lambda m: m.text == BTN_PROFILE)
 async def open_profile(message: Message, db, settings) -> None:
-    # актуализируем план (автодаунгрейд премиума по времени)
-    u = await limits_service.ensure_plan_fresh(db, message.from_user.id)
+    user_id = message.from_user.id
+    await _ensure_user(db, settings, user_id)
 
-    is_admin = settings.is_admin(message.from_user.id)
+    # актуализируем план (автодаунгрейд премиума по времени)
+    u = await limits_service.ensure_plan_fresh(db, user_id)
+
+    is_admin = settings.is_admin(user_id)
     ref_link = f"https://t.me/{settings.bot_username}?start={u.ref_code}"
 
     # режим
@@ -95,12 +104,15 @@ async def open_profile(message: Message, db, settings) -> None:
 
 @router.message(lambda m: m.text == BTN_REFERRALS)
 async def open_referrals(message: Message, db, settings) -> None:
-    u = await users_repo.get_user(db, message.from_user.id)
+    user_id = message.from_user.id
+    await _ensure_user(db, settings, user_id)
+
+    u = await users_repo.get_user(db, user_id)
     if not u:
         await message.answer(texts.GENERIC_ERROR, reply_markup=kb_main())
         return
 
-    stats = await refs_repo.get_ref_stats(db, message.from_user.id)
+    stats = await refs_repo.get_ref_stats(db, user_id)
     ref_link = f"https://t.me/{settings.bot_username}?start={u.ref_code}"
 
     txt = texts.REFERRALS_TEMPLATE.format(
@@ -123,13 +135,16 @@ async def open_subscription(message: Message, settings) -> None:
 
 @router.message(lambda m: m.text in (BTN_SUB_1M, BTN_SUB_3M, BTN_SUB_12M))
 async def create_invoice(message: Message, db, settings, cryptopay) -> None:
+    user_id = message.from_user.id
+    await _ensure_user(db, settings, user_id)
+
     months = 1 if message.text == BTN_SUB_1M else 3 if message.text == BTN_SUB_3M else 12
     amount = settings.price_1m if months == 1 else settings.price_3m if months == 3 else settings.price_12m
 
     inv = await payments_service.create_subscription_invoice(
         db,
         cryptopay,
-        user_id=message.from_user.id,
+        user_id=user_id,
         months=months,
         amount_usdt=float(amount),
     )
@@ -139,14 +154,18 @@ async def create_invoice(message: Message, db, settings, cryptopay) -> None:
 
 
 @router.message(lambda m: m.text == BTN_MODE_UNIVERSAL)
-async def set_universal(message: Message, db) -> None:
-    await users_repo.set_mode(db, message.from_user.id, "universal")
+async def set_universal(message: Message, db, settings) -> None:
+    user_id = message.from_user.id
+    await _ensure_user(db, settings, user_id)
+    await users_repo.set_mode(db, user_id, "universal")
     await message.answer("✅ Режим: <b>Универсальный</b>", reply_markup=kb_main())
 
 
 @router.message(lambda m: m.text == BTN_MODE_PRO)
-async def set_pro(message: Message, db) -> None:
-    await users_repo.set_mode(db, message.from_user.id, "pro")
+async def set_pro(message: Message, db, settings) -> None:
+    user_id = message.from_user.id
+    await _ensure_user(db, settings, user_id)
+    await users_repo.set_mode(db, user_id, "pro")
     await message.answer("✅ Режим: <b>Профессиональный</b>", reply_markup=kb_main())
 
 
@@ -161,7 +180,10 @@ async def invite(message: Message, db, settings) -> None:
 
 
 @router.message(lambda m: m.text == BTN_CHECKIN_TOGGLE)
-async def toggle_checkin(message: Message, db) -> None:
-    new_val = await users_repo.toggle_checkin(db, message.from_user.id)
+async def toggle_checkin(message: Message, db, settings) -> None:
+    user_id = message.from_user.id
+    await _ensure_user(db, settings, user_id)
+
+    new_val = await users_repo.toggle_checkin(db, user_id)
     status = "Вкл ✅" if new_val else "Выкл ❌"
     await message.answer(f"🫂 Ежедневный чек-ин: <b>{status}</b>", reply_markup=kb_profile())

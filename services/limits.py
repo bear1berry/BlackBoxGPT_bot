@@ -23,7 +23,12 @@ def today_str(tz: str) -> str:
 async def ensure_plan_fresh(db: aiosqlite.Connection, user_id: int) -> users_repo.User:
     u = await users_repo.get_user(db, user_id)
     if not u:
-        raise RuntimeError("User not found")
+        # Defensive: some entry-points may call limits before user creation.
+        # We auto-create the user with an empty salt (start-router will set proper referral later).
+        await users_repo.ensure_user(db, user_id, referrer_id=None, ref_salt="")
+        u = await users_repo.get_user(db, user_id)
+        if not u:
+            raise RuntimeError("User not found")
 
     now = int(time.time())
     if u.plan == "premium" and u.premium_until <= now:

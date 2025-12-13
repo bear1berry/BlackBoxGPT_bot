@@ -2,143 +2,154 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
-from pydantic import Field, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _parse_int_list(value: Any) -> List[int]:
+    """Accepts list[int] / json string / comma-separated string."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        out: List[int] = []
+        for x in value:
+            try:
+                out.append(int(x))
+            except Exception:
+                continue
+        return out
+    if isinstance(value, (int, float)):
+        return [int(value)]
+    s = str(value).strip()
+    if not s:
+        return []
+
+    # JSON array
+    if s.startswith("["):
+        try:
+            arr = json.loads(s)
+            return _parse_int_list(arr)
+        except Exception:
+            return []
+
+    # comma-separated
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    out: List[int] = []
+    for p in parts:
+        try:
+            out.append(int(p))
+        except Exception:
+            continue
+    return out
+
+
 class Settings(BaseSettings):
-    """
-    Контрактный Settings (Pydantic v2):
-    - исключаем AttributeError в рантайме (menu/chat/main)
-    - сохраняем совместимость с .env/.env.example (алиасы)
-    - ничего не вырезаем: только добавляем недостающие поля/методы и дефолты
+    """Single source of truth for configuration.
+
+    Important: keep this class in sync with code that uses Settings.
+    Routers/services are allowed to call:
+      - settings.is_admin(user_id)
+      - settings.admin_user_ids (property)
+      - settings.price_1m/price_3m/price_12m
+      - settings.checkin_hour/checkin_minute, fact_hour/fact_minute
     """
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        case_sensitive=False,
         extra="ignore",
+        case_sensitive=False,
     )
 
     # --- Telegram ---
-    bot_token: str = Field(alias="BOT_TOKEN")
-    bot_username: str = Field(alias="BOT_USERNAME")
+    bot_token: str = Field(..., alias="BOT_TOKEN")
+    bot_username: str = Field("BlackBoxAssistant_bot", alias="BOT_USERNAME")
 
-    # --- Timezone ---
-    timezone: str = Field(default="Europe/Moscow", alias="TIMEZONE")
+    # --- Runtime / logs ---
+    timezone: str = Field("Europe/Moscow", alias="TIMEZONE")
+    log_level: str = Field("INFO", alias="LOG_LEVEL")
 
-    # --- Logging ---
-    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    # --- Storage ---
+    data_dir: str = Field("data", alias="DATA_DIR")
+    db_path: str = Field("data/bot.db", alias="DB_PATH")
 
     # --- Admins ---
-    # ADMIN_USER_IDS поддерживает:
-    # - JSON: [1,2,3]
-    # - CSV:  1,2,3
-    admin_user_ids: list[int] = Field(default_factory=list, alias="ADMIN_USER_IDS")
+    _admin_user_ids_raw: Any = Field("[]", alias="ADMIN_USER_IDS")
 
-    @field_validator("admin_user_ids", mode="before")
-    @classmethod
-    def _parse_admin_ids(cls, v: Any) -> list[int]:
-        if v is None or v == "":
-            return []
-        if isinstance(v, (list, tuple, set)):
-            out: list[int] = []
-            for x in v:
-                try:
-                    out.append(int(x))
-                except Exception:
-                    continue
-            return out
-        if isinstance(v, str):
-            s = v.strip()
-            # JSON list
-            if s.startswith("[") and s.endswith("]"):
-                try:
-                    arr = json.loads(s)
-                    if isinstance(arr, list):
-                        return [int(x) for x in arr]
-                except Exception:
-                    pass
-            # CSV list
-            s = s.strip("[](){} ")
-            out: list[int] = []
-            for part in s.split(","):
-                part = part.strip().strip('"').strip("'")
-                if not part:
-                    continue
-                try:
-                    out.append(int(part))
-                except Exception:
-                    continue
-            return out
-        try:
-            return [int(v)]
-        except Exception:
-            return []
+    @property
+    def admin_user_ids(self) -> List[int]:
+        return _parse_int_list(self._admin_user_ids_raw)
 
     def is_admin(self, user_id: int) -> bool:
         try:
-            return int(user_id) in set(int(x) for x in (self.admin_user_ids or []))
+            return int(user_id) in self.admin_user_ids
         except Exception:
             return False
 
-    # --- Storage ---
-    data_dir: str = Field(default="data", alias="DATA_DIR")
-    db_path: str = Field(default="data/bot.sqlite3", alias="DB_PATH")
+    # --- Web server (health + CryptoPay webhook) ---
+    web_server_host: str = Field("0.0.0.0", alias="WEB_SERVER_HOST")
+    web_server_port: int = Field(8080, alias="WEB_SERVER_PORT")
 
-    # --- Web server (health/webhook) ---
-    web_server_host: str = Field(default="0.0.0.0", alias="WEB_SERVER_HOST")
-    web_server_port: int = Field(default=8080, alias="WEB_SERVER_PORT")
+    # --- Schedulers ---
+    checkin_hour: int = Field(22, alias="CHECKIN_HOUR")
+    checkin_minute: int = Field(0, alias="CHECKIN_MINUTE")
+    fact_hour: int = Field(10, alias="FACT_HOUR")
+    fact_minute: int = Field(0, alias="FACT_MINUTE")
 
-    @property
-    def web_host(self) -> str:  # compat
-        return self.web_server_host
+    # --- LLM keys / models ---
+    deepseek_api_key: str | None = Field(None, alias="DEEPSEEK_API_KEY")
+    deepseek_base_url: str = Field("https://api.deepseek.com", alias="DEEPSEEK_BASE_URL")
+    deepseek_model: str = Field("deepseek-chat", alias="DEEPSEEK_MODEL")
 
-    @property
-    def web_port(self) -> int:  # compat
-        return self.web_server_port
+    groq_api_key: str | None = Field(None, alias="GROQ_API_KEY")
+    groq_base_url: str = Field("https://api.groq.com/openai/v1", alias="GROQ_BASE_URL")
+    groq_model: str = Field("llama-3.3-70b-versatile", alias="GROQ_MODEL")
 
-    # --- Limits ---
-    basic_trial_limit: int = Field(default=10, alias="BASIC_TRIAL_LIMIT")
-    pro_daily_limit: int = Field(default=120, alias="PRO_DAILY_LIMIT")
-    premium_daily_limit: int = Field(default=500, alias="PREMIUM_DAILY_LIMIT")
-
-    # --- Prices (USDT) ---
-    # дефолты под твою текущую задачу
-    price_1m: float = Field(default=8.0, alias="PRICE_1M")
-    price_3m: float = Field(default=20.0, alias="PRICE_3M")
-    price_12m: float = Field(default=60.0, alias="PRICE_12M")
+    perplexity_api_key: str | None = Field(None, alias="PERPLEXITY_API_KEY")
+    perplexity_base_url: str = Field("https://api.perplexity.ai", alias="PERPLEXITY_BASE_URL")
+    perplexity_model: str = Field("sonar-pro", alias="PERPLEXITY_MODEL")
 
     # --- CryptoPay ---
-    cryptopay_api_token: str = Field(default="", alias="CRYPTOPAY_API_TOKEN")
-    cryptopay_base_url: str = Field(default="https://pay.crypt.bot/api", alias="CRYPTOPAY_BASE_URL")
-    cryptopay_webhook_secret: str = Field(default="", alias="CRYPTOPAY_WEBHOOK_SECRET")
-    cryptopay_webhook_url: str = Field(default="", alias="CRYPTOPAY_WEBHOOK_URL")
+    cryptopay_api_token: str | None = Field(None, alias="CRYPTOPAY_API_TOKEN")
+    cryptopay_base_url: str = Field("https://pay.crypt.bot/api", alias="CRYPTOPAY_BASE_URL")
+    cryptopay_webhook_secret: str | None = Field(None, alias="CRYPTOPAY_WEBHOOK_SECRET")
+    cryptopay_webhook_url: str | None = Field(None, alias="CRYPTOPAY_WEBHOOK_URL")
 
-    # --- LLM ---
-    deepseek_api_key: str = Field(default="", alias="DEEPSEEK_API_KEY")
-    deepseek_base_url: str = Field(default="https://api.deepseek.com", alias="DEEPSEEK_BASE_URL")
-    deepseek_model: str = Field(default="deepseek-chat", alias="DEEPSEEK_MODEL")
+    # --- Limits / plans ---
+    basic_trial_limit: int = Field(10, alias="BASIC_TRIAL_LIMIT")
+    premium_daily_limit: int = Field(100, alias="PREMIUM_DAILY_LIMIT")
 
-    perplexity_api_key: str = Field(default="", alias="PERPLEXITY_API_KEY")
-    perplexity_base_url: str = Field(default="https://api.perplexity.ai", alias="PERPLEXITY_BASE_URL")
-    perplexity_model: str = Field(default="sonar-pro", alias="PERPLEXITY_MODEL")
+    # Backward/forward compatibility (some older code used PRO_*)
+    pro_daily_limit: int = Field(100, alias="PRO_DAILY_LIMIT")
 
-    groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
-    groq_model: str = Field(default="llama-3.1-70b-versatile", alias="GROQ_MODEL")
+    # --- Prices (USDT) ---
+    price_1m: float = Field(8.0, alias="PRICE_1M")
+    price_3m: float = Field(20.0, alias="PRICE_3M")
+    price_12m: float = Field(60.0, alias="PRICE_12M")
 
     # --- Voice (Yandex SpeechKit) ---
-    enable_voice: bool = Field(default=False, alias="ENABLE_VOICE")
-    speechkit_api_key: str = Field(default="", alias="SPEECHKIT_API_KEY")
-    speechkit_folder_id: str = Field(default="", alias="SPEECHKIT_FOLDER_ID")
-    speechkit_lang: str = Field(default="ru-RU", alias="SPEECHKIT_LANG")
-    speechkit_topic: str = Field(default="general", alias="SPEECHKIT_TOPIC")
-    speechkit_timeout_sec: int = Field(default=25, alias="SPEECHKIT_TIMEOUT_SEC")
+    enable_voice: bool = Field(False, alias="ENABLE_VOICE")
+    speechkit_api_key: str | None = Field(None, alias="SPEECHKIT_API_KEY")
+    speechkit_folder_id: str | None = Field(None, alias="SPEECHKIT_FOLDER_ID")
+    speechkit_lang: str = Field("ru-RU", alias="SPEECHKIT_LANG")
+    speechkit_topic: str = Field("general", alias="SPEECHKIT_TOPIC")
+    speechkit_timeout_sec: int = Field(25, alias="SPEECHKIT_TIMEOUT_SEC")
 
+    # --- Referral salt ---
+    # Used to generate stable referral codes. If unset, falls back to BOT_TOKEN prefix.
+    ref_salt: str | None = Field(None, alias="REF_SALT")
 
-def ensure_dirs(settings: Settings) -> None:
-    Path(settings.data_dir).mkdir(parents=True, exist_ok=True)
-    Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
+    @property
+    def ref_salt_effective(self) -> str:
+        return (self.ref_salt or self.bot_token[:16]).strip()
+
+    # Convenience
+    @property
+    def data_dir_path(self) -> Path:
+        return Path(self.data_dir)
+
+    @property
+    def db_path_path(self) -> Path:
+        return Path(self.db_path)
