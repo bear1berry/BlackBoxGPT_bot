@@ -31,11 +31,8 @@ def _strip_tags(html: str) -> str:
 
 
 @router.message(lambda m: m.text and not m.text.startswith("/"))
-async def chat(message: Message) -> None:
-    bot = message.bot
-    db = bot["db"]
-    settings = bot["settings"]
-    orchestrator = bot["orchestrator"]
+async def chat(message: Message, db, settings, orchestrator):
+    # используешь db/settings/orchestrator напрямую
 
     # ensure user exists
     u = await users_repo.get_user(db, message.from_user.id)
