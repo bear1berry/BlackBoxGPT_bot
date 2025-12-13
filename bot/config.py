@@ -1,95 +1,98 @@
 from __future__ import annotations
 
-from pydantic import Field, AliasChoices
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # ВАЖНО: extra="ignore" — чтобы любые лишние ключи из .env НЕ валили запуск
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # Telegram
-    bot_token: str = Field(validation_alias=AliasChoices("BOT_TOKEN", "bot_token"))
-    bot_username: str = Field(validation_alias=AliasChoices("BOT_USERNAME", "bot_username"))
+    bot_token: str = Field(alias="BOT_TOKEN")
+    bot_username: str = Field(alias="BOT_USERNAME")
+
+    # Admins: строка вида "123,456 789"
+    admin_ids: list[int] = Field(default_factory=list, alias="ADMIN_IDS")
+
+    @field_validator("admin_ids", mode="before")
+    @classmethod
+    def _parse_admin_ids(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, (list, tuple, set)):
+            return [int(x) for x in v]
+        s = str(v).strip()
+        if not s:
+            return []
+        # принимаем "1,2 3;4"
+        s = s.replace(";", ",").replace(" ", ",")
+        parts = [p.strip() for p in s.split(",") if p.strip()]
+        out: list[int] = []
+        for p in parts:
+            if p.lstrip("-").isdigit():
+                out.append(int(p))
+        return out
+
+    @property
+    def admin_id_set(self) -> set[int]:
+        return set(self.admin_ids)
+
+    # --- Legacy keys (из старого .env) ---
+    llm_provider: str | None = None
+    perplexity_api_base: str | None = None
+    perplexity_model_universal: str | None = None
+    cryptopay_asset: str | None = None
 
     # DeepSeek (OpenAI-compatible)
-    deepseek_api_key: str = Field(default="", validation_alias=AliasChoices("DEEPSEEK_API_KEY", "deepseek_api_key"))
-    deepseek_base_url: str = Field(
-        default="https://api.deepseek.com",
-        validation_alias=AliasChoices("DEEPSEEK_BASE_URL", "deepseek_base_url"),
-    )
-    deepseek_model: str = Field(
-        default="deepseek-chat",
-        validation_alias=AliasChoices("DEEPSEEK_MODEL", "deepseek_model"),
-    )
+    deepseek_api_key: str = Field(default="", alias="DEEPSEEK_API_KEY")
+    deepseek_base_url: str = Field(default="https://api.deepseek.com", alias="DEEPSEEK_BASE_URL")
+    deepseek_model: str = Field(default="deepseek-chat", alias="DEEPSEEK_MODEL")
 
     # Perplexity (OpenAI-compatible)
-    perplexity_api_key: str = Field(default="", validation_alias=AliasChoices("PERPLEXITY_API_KEY", "perplexity_api_key"))
-
-    # ⚠️ Поддержка старого имени perplexity_api_base
-    perplexity_base_url: str = Field(
-        default="https://api.perplexity.ai",
-        validation_alias=AliasChoices("PERPLEXITY_BASE_URL", "perplexity_base_url", "perplexity_api_base"),
-    )
-
-    # ⚠️ Поддержка старого имени perplexity_model_universal
-    perplexity_model: str = Field(
-        default="sonar-pro",
-        validation_alias=AliasChoices("PERPLEXITY_MODEL", "perplexity_model", "perplexity_model_universal"),
-    )
+    perplexity_api_key: str = Field(default="", alias="PERPLEXITY_API_KEY")
+    perplexity_base_url: str = Field(default="https://api.perplexity.ai", alias="PERPLEXITY_BASE_URL")
+    perplexity_model: str = Field(default="sonar-pro", alias="PERPLEXITY_MODEL")
 
     # Crypto Pay (CryptoBot)
-    cryptopay_api_token: str = Field(default="", validation_alias=AliasChoices("CRYPTOPAY_API_TOKEN", "cryptopay_api_token"))
-    cryptopay_base_url: str = Field(
-        default="https://pay.crypt.bot/api",
-        validation_alias=AliasChoices("CRYPTOPAY_BASE_URL", "cryptopay_base_url"),
-    )
-    cryptopay_webhook_secret: str = Field(
-        default="change-me",
-        validation_alias=AliasChoices("CRYPTOPAY_WEBHOOK_SECRET", "cryptopay_webhook_secret"),
-    )
-
-    # ⚠️ Старый ключ, который у тебя есть в .env. Мы его просто принимаем, даже если код его не юзает.
-    cryptopay_asset: str = Field(default="USDT", validation_alias=AliasChoices("CRYPTOPAY_ASSET", "cryptopay_asset"))
+    cryptopay_api_token: str = Field(default="", alias="CRYPTOPAY_API_TOKEN")
+    cryptopay_base_url: str = Field(default="https://pay.crypt.bot/api", alias="CRYPTOPAY_BASE_URL")
+    cryptopay_webhook_secret: str = Field(default="change-me", alias="CRYPTOPAY_WEBHOOK_SECRET")
 
     # Storage
-    data_dir: str = Field(default="./data", validation_alias=AliasChoices("DATA_DIR", "data_dir"))
-    db_path: str = Field(default="./data/blackbox.db", validation_alias=AliasChoices("DB_PATH", "db_path"))
+    data_dir: str = Field(default="./data", alias="DATA_DIR")
+    db_path: str = Field(default="./data/blackbox.db", alias="DB_PATH")
 
     # Web server (webhooks)
-    web_server_host: str = Field(default="0.0.0.0", validation_alias=AliasChoices("WEB_SERVER_HOST", "web_server_host"))
-    web_server_port: int = Field(default=8080, validation_alias=AliasChoices("WEB_SERVER_PORT", "web_server_port"))
+    web_server_host: str = Field(default="0.0.0.0", alias="WEB_SERVER_HOST")
+    web_server_port: int = Field(default=8080, alias="WEB_SERVER_PORT")
 
     # Limits / Plans
-    basic_trial_limit: int = Field(default=10, validation_alias=AliasChoices("BASIC_TRIAL_LIMIT", "basic_trial_limit"))
-    premium_daily_limit: int = Field(default=100, validation_alias=AliasChoices("PREMIUM_DAILY_LIMIT", "premium_daily_limit"))
+    basic_trial_limit: int = Field(default=10, alias="BASIC_TRIAL_LIMIT")
+    premium_daily_limit: int = Field(default=100, alias="PREMIUM_DAILY_LIMIT")
 
     # Prices
-    price_1m: float = Field(default=6.99, validation_alias=AliasChoices("PRICE_1M", "price_1m"))
-    price_3m: float = Field(default=20.99, validation_alias=AliasChoices("PRICE_3M", "price_3m"))
-    price_12m: float = Field(default=59.99, validation_alias=AliasChoices("PRICE_12M", "price_12m"))
+    price_1m: float = Field(default=6.99, alias="PRICE_1M")
+    price_3m: float = Field(default=20.99, alias="PRICE_3M")
+    price_12m: float = Field(default=59.99, alias="PRICE_12M")
 
     # Features
-    enable_pro_research: bool = Field(default=True, validation_alias=AliasChoices("ENABLE_PRO_RESEARCH", "enable_pro_research"))
-    enable_formatter_pass: bool = Field(default=True, validation_alias=AliasChoices("ENABLE_FORMATTER_PASS", "enable_formatter_pass"))
-    enable_auto_summary: bool = Field(default=False, validation_alias=AliasChoices("ENABLE_AUTO_SUMMARY", "enable_auto_summary"))
-    max_context_messages: int = Field(default=12, validation_alias=AliasChoices("MAX_CONTEXT_MESSAGES", "max_context_messages"))
+    enable_pro_research: bool = Field(default=True, alias="ENABLE_PRO_RESEARCH")
+    enable_formatter_pass: bool = Field(default=True, alias="ENABLE_FORMATTER_PASS")
+    enable_auto_summary: bool = Field(default=False, alias="ENABLE_AUTO_SUMMARY")
+    max_context_messages: int = Field(default=12, alias="MAX_CONTEXT_MESSAGES")
 
     # Scheduler / time
-    timezone: str = Field(default="Europe/Moscow", validation_alias=AliasChoices("TIMEZONE", "timezone"))
-    checkin_hour: int = Field(default=22, validation_alias=AliasChoices("CHECKIN_HOUR", "checkin_hour"))
-    checkin_minute: int = Field(default=0, validation_alias=AliasChoices("CHECKIN_MINUTE", "checkin_minute"))
+    timezone: str = Field(default="Europe/Moscow", alias="TIMEZONE")
+    checkin_hour: int = Field(default=22, alias="CHECKIN_HOUR")
+    checkin_minute: int = Field(default=0, alias="CHECKIN_MINUTE")
 
     # Logging
-    log_level: str = Field(default="INFO", validation_alias=AliasChoices("LOG_LEVEL", "log_level"))
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # Optional: LanguageTool server for spellcheck
-    language_tool_url: str | None = Field(default=None, validation_alias=AliasChoices("LANGUAGE_TOOL_URL", "language_tool_url"))
-
-    # ⚠️ Старый ключ из .env (чтобы не валить запуск)
-    llm_provider: str | None = Field(default=None, validation_alias=AliasChoices("LLM_PROVIDER", "llm_provider"))
+    language_tool_url: str | None = Field(default=None, alias="LANGUAGE_TOOL_URL")
