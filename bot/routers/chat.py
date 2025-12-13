@@ -4,22 +4,20 @@ from __future__ import annotations
 import io
 import re
 import time
-from html import escape as html_escape
 
-from aiogram import Router, F
-from aiogram.types import Message
+from aiogram import Router
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import Message
 
-from bot.keyboards import ikb_continue, kb_main
 from bot import texts
-from services import users as users_repo
+from bot.keyboards import ikb_continue, kb_main
+from services import continues as cont_repo
 from services import limits as limits_service
 from services import memory as memory_repo
-from services import continues as cont_repo
-from services.llm.style import update_style
+from services import users as users_repo
 from services.llm.postprocess import clean_text
-from services.speechkit import recognize_oggopus, SpeechKitError
-
+from services.llm.style import update_style
+from services.voice import SpeechkitError, speech_to_text_oggopus
 
 router = Router()
 
@@ -33,64 +31,56 @@ def _strip_tags(html: str) -> str:
     return re.sub(r"<[^>]+>", "", html)
 
 
-async def _download_telegram_file_as_bytes(message: Message, file_id: str) -> bytes:
-    bot = message.bot
-    tg_file = await bot.get_file(file_id)
-    buf = io.BytesIO()
-    await bot.download_file(tg_file.file_path, destination=buf)
-    return buf.getvalue()
-
-
-async def _process_user_text(message: Message, db, settings, orchestrator, user_text: str) -> None:
-    # ensure user exists
-    u = await users_repo.get_user(db, message.from_user.id)
+async def _ensure_user(db, settings, user_id: int):
+    u = await users_repo.get_user(db, user_id)
     if not u:
         u = await users_repo.ensure_user(
             db,
-            message.from_user.id,
+            user_id,
             referrer_id=None,
             ref_salt=settings.bot_token[:16],
         )
+    return u
 
-    user_text = clean_text(user_text or "")
-    if not user_text.strip():
-        await message.answer("Не вижу текста. Попробуй ещё раз 🙂", reply_markup=kb_main())
-        return
 
-    is_admin = bool(getattr(settings, "is_admin", lambda _x: False)(u.user_id))
+async def _run_llm_flow(message: Message, db, settings, orchestrator, user_text: str, *, preface: str = "") -> None:
+    # ensure user exists
+    u = await _ensure_user(db, settings, message.from_user.id)
 
     # update style signals
     new_style = update_style(u.style, user_text)
     await users_repo.set_style(db, u.user_id, new_style)
     u.style = new_style
 
-    # limits (админов не режем)
-    if not is_admin:
-        res = await limits_service.consume(
-            db,
-            u.user_id,
-            timezone=settings.timezone,
-            basic_trial_limit=settings.basic_trial_limit,
-            premium_daily_limit=settings.premium_daily_limit,
-        )
-        if not res.ok:
-            if res.reason == "trial":
-                await message.answer(texts.TRIAL_LIMIT_REACHED, reply_markup=kb_main())
-                await message.answer("💎 Оформить подписку можно в «💎 Подписка».", reply_markup=kb_main())
-                return
-            if res.reason == "daily":
-                await message.answer(texts.DAILY_LIMIT_REACHED, reply_markup=kb_main())
-                return
+    # limits
+    res = await limits_service.consume(
+        db,
+        u.user_id,
+        timezone=settings.timezone,
+        basic_trial_limit=settings.basic_trial_limit,
+        premium_daily_limit=settings.premium_daily_limit,
+    )
+    if not res.ok:
+        if res.reason == "trial":
+            await message.answer(texts.TRIAL_LIMIT_REACHED, reply_markup=kb_main())
+            await message.answer("💎 Оформить подписку можно в «💎 Подписка».", reply_markup=kb_main())
+            return
+        if res.reason == "daily":
+            await message.answer(texts.DAILY_LIMIT_REACHED, reply_markup=kb_main())
+            return
 
-        # refresh user after usage update
-        u = await users_repo.get_user(db, u.user_id)
-        assert u is not None
+    # refresh user after usage update
+    u = await users_repo.get_user(db, u.user_id)
+    assert u is not None
 
     # remember user msg
-    await memory_repo.add(db, u.user_id, "user", user_text[:4000])
+    await memory_repo.add(db, u.user_id, "user", clean_text(user_text)[:4000])
 
     # loader message
-    loading = await message.answer("⌛ <i>Думаю над ответом…</i>", reply_markup=kb_main())
+    loading_text = "⌛ <i>Думаю над ответом…</i>"
+    if preface:
+        loading_text = preface + "\n" + loading_text
+    loading = await message.answer(loading_text, reply_markup=kb_main())
 
     last_edit = 0.0
     can_edit = True
@@ -116,7 +106,7 @@ async def _process_user_text(message: Message, db, settings, orchestrator, user_
         if now - last_edit < 0.9:
             return
         last_edit = now
-        await safe_edit("⌛ <i>Думаю над ответом…</i>\n\n" + preview_html_escaped)
+        await safe_edit(loading_text + "\n\n" + preview_html_escaped)
 
     try:
         html_out = await orchestrator.answer_stream(
@@ -132,7 +122,8 @@ async def _process_user_text(message: Message, db, settings, orchestrator, user_
             await message.answer(texts.GENERIC_ERROR, reply_markup=kb_main())
         return
 
-    if u.mode == "pro" and _MEDICAL_RE.search(user_text):
+    # medical disclaimer (pro)
+    if u.mode == "pro" and _MEDICAL_RE.search(user_text or ""):
         html_out = texts.MEDICAL_DISCLAIMER + "\n\n" + html_out
 
     parts = orchestrator.split_for_telegram(html_out)
@@ -147,33 +138,74 @@ async def _process_user_text(message: Message, db, settings, orchestrator, user_
         if not ok:
             await message.answer(parts[0], reply_markup=ikb_continue(state.token))
 
+    # store assistant memory (plain)
     await memory_repo.add(db, u.user_id, "assistant", _strip_tags(parts[0])[:4000])
 
 
-@router.message(F.voice)
-async def voice_chat(message: Message, db, settings, orchestrator, cryptopay=None):
-    loading = await message.answer("🎙️ <i>Распознаю голос…</i>", reply_markup=kb_main())
+@router.message(lambda m: m.voice is not None)
+async def chat_voice(message: Message, db, settings, orchestrator, cryptopay=None):
+    if not getattr(settings, "enable_voice", False):
+        await message.answer("🎙️ Голосовые сейчас выключены.", reply_markup=kb_main())
+        return
 
+    # экономим SpeechKit, если лимиты уже выбиты
+    u = await _ensure_user(db, settings, message.from_user.id)
+    res = await limits_service.peek(  # если peek нет — см. ниже примечание
+        db,
+        u.user_id,
+        timezone=settings.timezone,
+        basic_trial_limit=settings.basic_trial_limit,
+        premium_daily_limit=settings.premium_daily_limit,
+    )
+    if res is not None and not res.ok:
+        # если у тебя нет peek — просто убери этот блок, и лимиты проверятся внутри _run_llm_flow
+        if res.reason == "trial":
+            await message.answer(texts.TRIAL_LIMIT_REACHED, reply_markup=kb_main())
+            await message.answer("💎 Оформить подписку можно в «💎 Подписка».", reply_markup=kb_main())
+            return
+        if res.reason == "daily":
+            await message.answer(texts.DAILY_LIMIT_REACHED, reply_markup=kb_main())
+            return
+
+    # скачиваем voice (ogg/opus)
+    loading = await message.answer("🎙️ <i>Расшифровываю голос…</i>", reply_markup=kb_main())
     try:
-        audio_bytes = await _download_telegram_file_as_bytes(message, message.voice.file_id)
-        stt = await recognize_oggopus(audio_bytes, settings=settings)
-        text = stt.text.strip()
-    except SpeechKitError as e:
-        await loading.edit_text(f"❌ <b>Голос не распознан</b>\n\n{html_escape(str(e))}", reply_markup=kb_main())
+        file = await message.bot.get_file(message.voice.file_id)
+        buf = io.BytesIO()
+        await message.bot.download_file(file.file_path, buf)
+        audio_bytes = buf.getvalue()
+
+        text = await speech_to_text_oggopus(
+            audio_bytes,
+            api_key=settings.speechkit_api_key,
+            folder_id=settings.speechkit_folder_id,
+            lang=settings.speechkit_lang,
+            topic=settings.speechkit_topic,
+            timeout_sec=settings.speechkit_timeout_sec,
+        )
+    except SpeechkitError:
+        await loading.edit_text("🎙️ Не смог распознать голос. Попробуй чуть медленнее/громче.", reply_markup=kb_main())
         return
     except Exception:
-        await loading.edit_text("❌ Не получилось обработать голос. Попробуй ещё раз.", reply_markup=kb_main())
+        await loading.edit_text("🎙️ Ошибка обработки голосового.", reply_markup=kb_main())
         return
 
-    preview = html_escape(text[:220])
-    await loading.edit_text(
-        f"🎙️ <i>Распознано:</i> <code>{preview}</code>\n\n⌛ <i>Думаю над ответом…</i>",
-        reply_markup=kb_main(),
+    # убираем “временное” сообщение и запускаем обычный текстовый пайплайн
+    try:
+        await loading.delete()
+    except Exception:
+        pass
+
+    await _run_llm_flow(
+        message,
+        db,
+        settings,
+        orchestrator,
+        text,
+        preface=f"📝 <b>Расшифровка:</b> {_strip_tags(text)[:300]}",
     )
 
-    await _process_user_text(message, db, settings, orchestrator, text)
 
-
-@router.message(F.text & ~F.text.startswith("/"))
+@router.message(lambda m: m.text and not m.text.startswith("/"))
 async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
-    await _process_user_text(message, db, settings, orchestrator, message.text or "")
+    await _run_llm_flow(message, db, settings, orchestrator, message.text or "")
