@@ -4,27 +4,21 @@ from __future__ import annotations
 import io
 import re
 import time
-from typing import Optional
+from html import escape as html_escape
 
-from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram import Router
 from aiogram.types import Message
+from aiogram.exceptions import TelegramBadRequest
 
-from bot import texts
 from bot.keyboards import ikb_continue, kb_main
-from services import continues as cont_repo
+from bot import texts
+from services import users as users_repo
 from services import limits as limits_service
 from services import memory as memory_repo
-from services import users as users_repo
-from services.llm.postprocess import clean_text
+from services import continues as cont_repo
 from services.llm.style import update_style
-
-# SpeechKit (STT)
-try:
-    from services.speechkit import SpeechKitError, SpeechKitSTT
-except Exception:  # чтобы не падать, если файл ещё не создан
-    SpeechKitSTT = None  # type: ignore
-    SpeechKitError = Exception  # type: ignore
+from services.llm.postprocess import clean_text
+from services.speechkit import recognize_oggopus, SpeechKitError
 
 
 router = Router()
@@ -39,12 +33,18 @@ def _strip_tags(html: str) -> str:
     return re.sub(r"<[^>]+>", "", html)
 
 
-async def _process_user_text(message: Message, db, settings, orchestrator, user_text: str) -> None:
-    text = (user_text or "").strip()
-    if not text:
-        await message.answer("Напиши текстом или запиши голосом 🙂", reply_markup=kb_main())
-        return
+async def _download_telegram_file_as_bytes(message: Message, file_id: str) -> bytes:
+    """
+    Скачиваем файл из Telegram в память (Bytes).
+    """
+    bot = message.bot
+    tg_file = await bot.get_file(file_id)
+    buf = io.BytesIO()
+    await bot.download_file(tg_file.file_path, destination=buf)
+    return buf.getvalue()
 
+
+async def _process_user_text(message: Message, db, settings, orchestrator, user_text: str) -> None:
     # ensure user exists
     u = await users_repo.get_user(db, message.from_user.id)
     if not u:
@@ -55,8 +55,13 @@ async def _process_user_text(message: Message, db, settings, orchestrator, user_
             ref_salt=settings.bot_token[:16],
         )
 
+    user_text = clean_text(user_text or "")
+    if not user_text.strip():
+        await message.answer("Не вижу текста. Попробуй ещё раз 🙂", reply_markup=kb_main())
+        return
+
     # update style signals
-    new_style = update_style(u.style, text)
+    new_style = update_style(u.style, user_text)
     await users_repo.set_style(db, u.user_id, new_style)
     u.style = new_style
 
@@ -82,7 +87,7 @@ async def _process_user_text(message: Message, db, settings, orchestrator, user_
     assert u is not None
 
     # remember user msg
-    await memory_repo.add(db, u.user_id, "user", clean_text(text)[:4000])
+    await memory_repo.add(db, u.user_id, "user", user_text[:4000])
 
     # loader message
     loading = await message.answer("⌛ <i>Думаю над ответом…</i>", reply_markup=kb_main())
@@ -90,16 +95,12 @@ async def _process_user_text(message: Message, db, settings, orchestrator, user_
     last_edit = 0.0
     can_edit = True
 
-    async def safe_edit(html: str, reply_markup=None) -> bool:
-        """
-        Единая точка редактирования loader-сообщения.
-        Если Telegram запретил редактировать — больше не пытаемся, уходим в fallback.
-        """
+    async def safe_edit(text: str, reply_markup=None) -> bool:
         nonlocal can_edit
         if not can_edit:
             return False
         try:
-            await loading.edit_text(html, reply_markup=reply_markup)
+            await loading.edit_text(text, reply_markup=reply_markup)
             return True
         except TelegramBadRequest as e:
             msg = str(e)
@@ -123,7 +124,7 @@ async def _process_user_text(message: Message, db, settings, orchestrator, user_
             u.user_id,
             u.mode,
             u.style,
-            text,
+            user_text,
             on_delta=on_delta,
         )
     except Exception:
@@ -132,7 +133,7 @@ async def _process_user_text(message: Message, db, settings, orchestrator, user_
         return
 
     # medical disclaimer (pro)
-    if u.mode == "pro" and _MEDICAL_RE.search(text):
+    if u.mode == "pro" and _MEDICAL_RE.search(user_text):
         html_out = texts.MEDICAL_DISCLAIMER + "\n\n" + html_out
 
     parts = orchestrator.split_for_telegram(html_out)
@@ -151,52 +152,31 @@ async def _process_user_text(message: Message, db, settings, orchestrator, user_
     await memory_repo.add(db, u.user_id, "assistant", _strip_tags(parts[0])[:4000])
 
 
-@router.message(F.voice)
-async def chat_voice(message: Message, db, settings, orchestrator, cryptopay=None):
-    # защита от падений если конфиг/сервис ещё не добавлены
-    enable_voice = bool(getattr(settings, "enable_voice", False))
-    if not enable_voice or SpeechKitSTT is None:
-        await message.answer("🎙️ Голосовые сейчас отключены.", reply_markup=kb_main())
-        return
-
-    api_key = getattr(settings, "speechkit_api_key", "") or ""
-    iam_token = getattr(settings, "speechkit_iam_token", "") or ""
-    folder_id = getattr(settings, "speechkit_folder_id", "") or ""
-    lang = getattr(settings, "speechkit_lang", "ru-RU") or "ru-RU"
-    topic = getattr(settings, "speechkit_topic", "general") or "general"
-
-    stt = SpeechKitSTT(
-        api_key=api_key,
-        iam_token=iam_token,
-        folder_id=folder_id,
-        lang=lang,
-        topic=topic,
-    )
-
-    if not stt.is_enabled():
-        await message.answer("🎙️ SpeechKit не настроен (нет ключа/токена).", reply_markup=kb_main())
-        return
-
-    # скачать voice из Telegram (ogg/opus)
-    buf = io.BytesIO()
-    await message.bot.download(message.voice, destination=buf)
-    audio_bytes = buf.getvalue()
+@router.message(lambda m: m.voice is not None)
+async def voice_chat(message: Message, db, settings, orchestrator, cryptopay=None):
+    # быстрый UX: сразу показываем, что приняли голос
+    loading = await message.answer("🎙️ <i>Распознаю голос…</i>", reply_markup=kb_main())
 
     try:
-        recognized = await stt.recognize_oggopus(audio_bytes)
+        audio_bytes = await _download_telegram_file_as_bytes(message, message.voice.file_id)
+        stt = await recognize_oggopus(audio_bytes, settings=settings)
+        text = stt.text.strip()
     except SpeechKitError as e:
-        await message.answer(f"🎙️ Не смог распознать голос: {e}", reply_markup=kb_main())
+        await loading.edit_text(f"❌ <b>Голос не распознан</b>\n\n{html_escape(str(e))}", reply_markup=kb_main())
         return
     except Exception:
-        await message.answer("🎙️ Ошибка распознавания. Попробуй ещё раз короче/чётче.", reply_markup=kb_main())
+        await loading.edit_text("❌ Не получилось обработать голос. Попробуй ещё раз.", reply_markup=kb_main())
         return
 
-    recognized = (recognized or "").strip()
-    if not recognized:
-        await message.answer("🎙️ Ничего не расслышал. Скажи чуть громче/короче 🙂", reply_markup=kb_main())
-        return
+    # показываем короткий превью распознанного (чтобы ты видел, что всё ок)
+    preview = html_escape(text[:220])
+    await loading.edit_text(
+        f"🎙️ <i>Распознано:</i> <code>{preview}</code>\n\n⌛ <i>Думаю над ответом…</i>",
+        reply_markup=kb_main(),
+    )
 
-    await _process_user_text(message, db, settings, orchestrator, recognized)
+    # дальше — тот же пайплайн, что и у текста
+    await _process_user_text(message, db, settings, orchestrator, text)
 
 
 @router.message(lambda m: m.text and not m.text.startswith("/"))
