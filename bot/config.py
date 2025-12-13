@@ -5,12 +5,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # Главное: не падать от лишних переменных в .env
+    # ВАЖНО: extra="ignore" — чтобы любые лишние ключи из .env НЕ валили запуск
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        case_sensitive=False,
         extra="ignore",
+        case_sensitive=False,
     )
 
     # Telegram
@@ -23,21 +23,25 @@ class Settings(BaseSettings):
         default="https://api.deepseek.com",
         validation_alias=AliasChoices("DEEPSEEK_BASE_URL", "deepseek_base_url"),
     )
-    deepseek_model: str = Field(default="deepseek-chat", validation_alias=AliasChoices("DEEPSEEK_MODEL", "deepseek_model"))
+    deepseek_model: str = Field(
+        default="deepseek-chat",
+        validation_alias=AliasChoices("DEEPSEEK_MODEL", "deepseek_model"),
+    )
 
-    # Perplexity (OpenAI-compatible) + поддержка старых имен
+    # Perplexity (OpenAI-compatible)
     perplexity_api_key: str = Field(default="", validation_alias=AliasChoices("PERPLEXITY_API_KEY", "perplexity_api_key"))
+
+    # ⚠️ Поддержка старого имени perplexity_api_base
     perplexity_base_url: str = Field(
         default="https://api.perplexity.ai",
         validation_alias=AliasChoices("PERPLEXITY_BASE_URL", "perplexity_base_url", "perplexity_api_base"),
     )
+
+    # ⚠️ Поддержка старого имени perplexity_model_universal
     perplexity_model: str = Field(
         default="sonar-pro",
         validation_alias=AliasChoices("PERPLEXITY_MODEL", "perplexity_model", "perplexity_model_universal"),
     )
-
-    # Старый/лишний ключ — оставляем, чтобы не было ValidationError
-    llm_provider: str | None = Field(default=None, validation_alias=AliasChoices("LLM_PROVIDER", "llm_provider"))
 
     # Crypto Pay (CryptoBot)
     cryptopay_api_token: str = Field(default="", validation_alias=AliasChoices("CRYPTOPAY_API_TOKEN", "cryptopay_api_token"))
@@ -50,8 +54,8 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("CRYPTOPAY_WEBHOOK_SECRET", "cryptopay_webhook_secret"),
     )
 
-    # Старый/лишний ключ — чтобы не падало
-    cryptopay_asset: str | None = Field(default=None, validation_alias=AliasChoices("CRYPTOPAY_ASSET", "cryptopay_asset"))
+    # ⚠️ Старый ключ, который у тебя есть в .env. Мы его просто принимаем, даже если код его не юзает.
+    cryptopay_asset: str = Field(default="USDT", validation_alias=AliasChoices("CRYPTOPAY_ASSET", "cryptopay_asset"))
 
     # Storage
     data_dir: str = Field(default="./data", validation_alias=AliasChoices("DATA_DIR", "data_dir"))
@@ -86,3 +90,6 @@ class Settings(BaseSettings):
 
     # Optional: LanguageTool server for spellcheck
     language_tool_url: str | None = Field(default=None, validation_alias=AliasChoices("LANGUAGE_TOOL_URL", "language_tool_url"))
+
+    # ⚠️ Старый ключ из .env (чтобы не валить запуск)
+    llm_provider: str | None = Field(default=None, validation_alias=AliasChoices("LLM_PROVIDER", "llm_provider"))
