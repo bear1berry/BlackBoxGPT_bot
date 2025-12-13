@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # даже если в .env есть лишние ключи — не падаем
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -16,31 +19,22 @@ class Settings(BaseSettings):
     bot_token: str = Field(alias="BOT_TOKEN")
     bot_username: str = Field(alias="BOT_USERNAME")
 
-    # Admins: строка вида "123,456 789"
-    admin_ids: list[int] = Field(default_factory=list, alias="ADMIN_IDS")
+    # Admins (через .env: ADMIN_USER_IDS=123,456)
+    admin_user_ids: list[int] = Field(default_factory=list, alias="ADMIN_USER_IDS")
 
-    @field_validator("admin_ids", mode="before")
+    @field_validator("admin_user_ids", mode="before")
     @classmethod
-    def _parse_admin_ids(cls, v):
-        if v is None:
+    def _parse_admin_ids(cls, v: Any) -> list[int]:
+        if v is None or v == "":
             return []
+        if isinstance(v, str):
+            return [int(x.strip()) for x in v.split(",") if x.strip()]
         if isinstance(v, (list, tuple, set)):
             return [int(x) for x in v]
-        s = str(v).strip()
-        if not s:
-            return []
-        # принимаем "1,2 3;4"
-        s = s.replace(";", ",").replace(" ", ",")
-        parts = [p.strip() for p in s.split(",") if p.strip()]
-        out: list[int] = []
-        for p in parts:
-            if p.lstrip("-").isdigit():
-                out.append(int(p))
-        return out
+        return []
 
-    @property
-    def admin_id_set(self) -> set[int]:
-        return set(self.admin_ids)
+    def is_admin(self, user_id: int) -> bool:
+        return user_id in set(self.admin_user_ids)
 
     # --- Legacy keys (из старого .env) ---
     llm_provider: str | None = None
@@ -79,20 +73,3 @@ class Settings(BaseSettings):
     price_1m: float = Field(default=6.99, alias="PRICE_1M")
     price_3m: float = Field(default=20.99, alias="PRICE_3M")
     price_12m: float = Field(default=59.99, alias="PRICE_12M")
-
-    # Features
-    enable_pro_research: bool = Field(default=True, alias="ENABLE_PRO_RESEARCH")
-    enable_formatter_pass: bool = Field(default=True, alias="ENABLE_FORMATTER_PASS")
-    enable_auto_summary: bool = Field(default=False, alias="ENABLE_AUTO_SUMMARY")
-    max_context_messages: int = Field(default=12, alias="MAX_CONTEXT_MESSAGES")
-
-    # Scheduler / time
-    timezone: str = Field(default="Europe/Moscow", alias="TIMEZONE")
-    checkin_hour: int = Field(default=22, alias="CHECKIN_HOUR")
-    checkin_minute: int = Field(default=0, alias="CHECKIN_MINUTE")
-
-    # Logging
-    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
-
-    # Optional: LanguageTool server for spellcheck
-    language_tool_url: str | None = Field(default=None, alias="LANGUAGE_TOOL_URL")
