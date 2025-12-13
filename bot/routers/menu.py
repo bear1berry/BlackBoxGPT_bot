@@ -1,145 +1,217 @@
+cat > bot/routers/chat.py <<'PY'
 from __future__ import annotations
 
-from datetime import datetime
-from zoneinfo import ZoneInfo
+import io
+import re
+import time
 
 from aiogram import Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message
 
-from bot.keyboards import (
-    BTN_BACK,
-    BTN_CHECKIN_TOGGLE,
-    BTN_INVITE,
-    BTN_MODE_PRO,
-    BTN_MODE_UNIVERSAL,
-    BTN_MODES,
-    BTN_PROFILE,
-    BTN_REFERRALS,
-    BTN_RENEW,
-    BTN_SUBSCRIPTION,
-    BTN_SUB_1M,
-    BTN_SUB_3M,
-    BTN_SUB_12M,
-    kb_back_only,
-    kb_main,
-    kb_modes,
-    kb_profile,
-    kb_subscription,
-)
 from bot import texts
-from services import users as users_repo
-from services import referrals as refs_repo
+from bot.keyboards import ikb_continue, kb_main
+from services import continues as cont_repo
 from services import limits as limits_service
-from services import payments as payments_service
+from services import memory as memory_repo
+from services import users as users_repo
+from services.llm.postprocess import clean_text
+from services.llm.style import update_style
+from services.voice import SpeechkitError, speech_to_text_oggopus
 
 router = Router()
 
-
-def _fmt_date(ts: int, tz: str) -> str:
-    if ts <= 0:
-        return "—"
-    dt = datetime.fromtimestamp(ts, tz=ZoneInfo(tz))
-    return dt.strftime("%Y-%m-%d")
+_MEDICAL_RE = re.compile(
+    r"\b(болит|боль|температур|кашел|насморк|давлен|пульс|тошнит|рвот|понос|диаре|сыпь|аллерг|анализ|симптом|врач|лекарств|таблет|антибиот|дозировк|мг|ml|мл)\b",
+    re.IGNORECASE,
+)
 
 
-@router.message(lambda m: m.text == BTN_BACK)
-async def back_to_main(message: Message) -> None:
-    await message.answer("⚙️ Меню", reply_markup=kb_main())
+def _strip_tags(html: str) -> str:
+    return re.sub(r"<[^>]+>", "", html)
 
 
-@router.message(lambda m: m.text == BTN_MODES)
-async def open_modes(message: Message) -> None:
-    await message.answer(texts.MODE_MENU_TEXT, reply_markup=kb_modes())
-
-
-@router.message(lambda m: m.text == BTN_PROFILE)
-async def open_profile(message: Message, db, settings) -> None:
-    u = await limits_service.ensure_plan_fresh(db, message.from_user.id)
-    ref_link = f"https://t.me/{settings.bot_username}?start={u.ref_code}"
-
-    trial_left = max(0, settings.basic_trial_limit - u.trial_used)
-    plan = "Premium" if u.is_premium else "Базовый"
-    mode = "Профессиональный" if u.mode == "pro" else "Универсальный"
-    checkin = "Вкл" if u.checkin_enabled else "Выкл"
-
-    txt = texts.PROFILE_TEMPLATE.format(
-        plan=plan,
-        premium_until=_fmt_date(u.premium_until, settings.timezone),
-        used_today=u.daily_used,
-        daily_limit=settings.premium_daily_limit if u.is_premium else "—",
-        trial_left=trial_left,
-        mode=mode,
-        checkin=checkin,
-        ref_link=ref_link,
-    )
-    await message.answer(txt, reply_markup=kb_profile())
-
-
-@router.message(lambda m: m.text == BTN_REFERRALS)
-async def open_referrals(message: Message, db, settings) -> None:
-    u = await users_repo.get_user(db, message.from_user.id)
+async def _ensure_user(db, settings, user_id: int):
+    u = await users_repo.get_user(db, user_id)
     if not u:
-        await message.answer(texts.GENERIC_ERROR, reply_markup=kb_main())
+        u = await users_repo.ensure_user(
+            db,
+            user_id,
+            referrer_id=None,
+            ref_salt=settings.bot_token[:16],
+        )
+    return u
+
+
+async def _run_llm_flow(message: Message, db, settings, orchestrator, user_text: str, *, preface: str = "") -> None:
+    # ensure user exists
+    u = await _ensure_user(db, settings, message.from_user.id)
+
+    # admin flag (♾)
+    is_admin = settings.is_admin(u.user_id)
+
+    # update style signals
+    new_style = update_style(u.style, user_text)
+    await users_repo.set_style(db, u.user_id, new_style)
+    u.style = new_style
+
+    # limits
+    res = await limits_service.consume(
+        db,
+        u.user_id,
+        timezone=settings.timezone,
+        basic_trial_limit=settings.basic_trial_limit,
+        premium_daily_limit=settings.premium_daily_limit,
+        is_admin=is_admin,
+    )
+    if not res.ok:
+        if res.reason == "trial":
+            await message.answer(texts.TRIAL_LIMIT_REACHED, reply_markup=kb_main())
+            await message.answer("💎 Оформить подписку можно в «💎 Подписка».", reply_markup=kb_main())
+            return
+        if res.reason == "daily":
+            await message.answer(texts.DAILY_LIMIT_REACHED, reply_markup=kb_main())
+            return
+
+    # refresh user after usage update
+    u = await users_repo.get_user(db, u.user_id)
+    assert u is not None
+
+    # remember user msg
+    await memory_repo.add(db, u.user_id, "user", clean_text(user_text)[:4000])
+
+    # loader message
+    loading_text = "⌛ <i>Думаю над ответом…</i>"
+    if preface:
+        loading_text = preface + "\n" + loading_text
+    loading = await message.answer(loading_text, reply_markup=kb_main())
+
+    last_edit = 0.0
+    can_edit = True
+
+    async def safe_edit(text: str, reply_markup=None) -> bool:
+        nonlocal can_edit
+        if not can_edit:
+            return False
+        try:
+            await loading.edit_text(text, reply_markup=reply_markup)
+            return True
+        except TelegramBadRequest as e:
+            msg = str(e)
+            if ("message can't be edited" in msg) or ("message to edit not found" in msg):
+                can_edit = False
+            return False
+        except Exception:
+            return False
+
+    async def on_delta(preview_html_escaped: str) -> None:
+        nonlocal last_edit
+        now = time.monotonic()
+        if now - last_edit < 0.9:
+            return
+        last_edit = now
+        await safe_edit(loading_text + "\n\n" + preview_html_escaped)
+
+    try:
+        html_out = await orchestrator.answer_stream(
+            db,
+            u.user_id,
+            u.mode,
+            u.style,
+            user_text,
+            on_delta=on_delta,
+        )
+    except Exception:
+        if not await safe_edit(texts.GENERIC_ERROR, reply_markup=None):
+            await message.answer(texts.GENERIC_ERROR, reply_markup=kb_main())
         return
 
-    stats = await refs_repo.get_ref_stats(db, message.from_user.id)
-    ref_link = f"https://t.me/{settings.bot_username}?start={u.ref_code}"
+    # medical disclaimer (pro)
+    if u.mode == "pro" and _MEDICAL_RE.search(user_text or ""):
+        html_out = texts.MEDICAL_DISCLAIMER + "\n\n" + html_out
 
-    txt = texts.REFERRALS_TEMPLATE.format(ref_link=ref_link, total=stats.total, premium=stats.premium)
-    await message.answer(txt, reply_markup=kb_back_only())
+    parts = orchestrator.split_for_telegram(html_out)
+
+    if len(parts) == 1:
+        ok = await safe_edit(parts[0], reply_markup=None)
+        if not ok:
+            await message.answer(parts[0])
+    else:
+        state = await cont_repo.create(db, u.user_id, parts)
+        ok = await safe_edit(parts[0], reply_markup=ikb_continue(state.token))
+        if not ok:
+            await message.answer(parts[0], reply_markup=ikb_continue(state.token))
+
+    # store assistant memory (plain)
+    await memory_repo.add(db, u.user_id, "assistant", _strip_tags(parts[0])[:4000])
 
 
-@router.message(lambda m: m.text == BTN_SUBSCRIPTION)
-async def open_subscription(message: Message, settings) -> None:
-    txt = texts.SUBSCRIPTION_MENU_TEXT.format(
-        price_1m=f"{settings.price_1m:.2f}",
-        price_3m=f"{settings.price_3m:.2f}",
-        price_12m=f"{settings.price_12m:.2f}",
-    )
-    await message.answer(txt, reply_markup=kb_subscription())
+@router.message(lambda m: m.voice is not None)
+async def chat_voice(message: Message, db, settings, orchestrator, cryptopay=None):
+    if not getattr(settings, "enable_voice", False):
+        await message.answer("🎙️ Голосовые сейчас выключены.", reply_markup=kb_main())
+        return
 
+    u = await _ensure_user(db, settings, message.from_user.id)
+    is_admin = settings.is_admin(u.user_id)
 
-@router.message(lambda m: m.text in (BTN_SUB_1M, BTN_SUB_3M, BTN_SUB_12M))
-async def create_invoice(message: Message, db, settings, cryptopay) -> None:
-    months = 1 if message.text == BTN_SUB_1M else 3 if message.text == BTN_SUB_3M else 12
-    amount = settings.price_1m if months == 1 else settings.price_3m if months == 3 else settings.price_12m
-
-    inv = await payments_service.create_subscription_invoice(
+    # экономим SpeechKit, если лимиты уже выбиты
+    res = await limits_service.peek(
         db,
-        cryptopay,
-        user_id=message.from_user.id,
-        months=months,
-        amount_usdt=float(amount),
+        u.user_id,
+        timezone=settings.timezone,
+        basic_trial_limit=settings.basic_trial_limit,
+        premium_daily_limit=settings.premium_daily_limit,
+        is_admin=is_admin,
+    )
+    if res is not None and not res.ok:
+        if res.reason == "trial":
+            await message.answer(texts.TRIAL_LIMIT_REACHED, reply_markup=kb_main())
+            await message.answer("💎 Оформить подписку можно в «💎 Подписка».", reply_markup=kb_main())
+            return
+        if res.reason == "daily":
+            await message.answer(texts.DAILY_LIMIT_REACHED, reply_markup=kb_main())
+            return
+
+    # скачиваем voice (ogg/opus)
+    loading = await message.answer("🎙️ <i>Расшифровываю голос…</i>", reply_markup=kb_main())
+    try:
+        file = await message.bot.get_file(message.voice.file_id)
+        buf = io.BytesIO()
+        await message.bot.download_file(file.file_path, buf)
+        audio_bytes = buf.getvalue()
+
+        text = await speech_to_text_oggopus(
+            audio_bytes,
+            api_key=settings.speechkit_api_key,
+            folder_id=settings.speechkit_folder_id,
+            lang=settings.speechkit_lang,
+            topic=settings.speechkit_topic,
+            timeout_sec=settings.speechkit_timeout_sec,
+        )
+    except SpeechkitError:
+        await loading.edit_text("🎙️ Не смог распознать голос. Попробуй чуть медленнее/громче.", reply_markup=kb_main())
+        return
+    except Exception:
+        await loading.edit_text("🎙️ Ошибка обработки голосового.", reply_markup=kb_main())
+        return
+
+    try:
+        await loading.delete()
+    except Exception:
+        pass
+
+    await _run_llm_flow(
+        message,
+        db,
+        settings,
+        orchestrator,
+        text,
+        preface=f"📝 <b>Расшифровка:</b> {_strip_tags(text)[:300]}",
     )
 
-    pay_url = inv.bot_invoice_url or ""
-    await message.answer(texts.PAYMENT_CREATED + f"\n\n🔗 {pay_url}", reply_markup=kb_subscription())
 
-
-@router.message(lambda m: m.text == BTN_MODE_UNIVERSAL)
-async def set_universal(message: Message, db) -> None:
-    await users_repo.set_mode(db, message.from_user.id, "universal")
-    await message.answer("✅ Режим: <b>Универсальный</b>", reply_markup=kb_main())
-
-
-@router.message(lambda m: m.text == BTN_MODE_PRO)
-async def set_pro(message: Message, db) -> None:
-    await users_repo.set_mode(db, message.from_user.id, "pro")
-    await message.answer("✅ Режим: <b>Профессиональный</b>", reply_markup=kb_main())
-
-
-@router.message(lambda m: m.text == BTN_RENEW)
-async def renew(message: Message, settings) -> None:
-    await open_subscription(message, settings=settings)
-
-
-@router.message(lambda m: m.text == BTN_INVITE)
-async def invite(message: Message, db, settings) -> None:
-    await open_referrals(message, db=db, settings=settings)
-
-
-@router.message(lambda m: m.text == BTN_CHECKIN_TOGGLE)
-async def toggle_checkin(message: Message, db) -> None:
-    new_val = await users_repo.toggle_checkin(db, message.from_user.id)
-    status = "Вкл ✅" if new_val else "Выкл ❌"
-    await message.answer(f"🫂 Ежедневный чек-ин: <b>{status}</b>", reply_markup=kb_profile())
+@router.message(lambda m: m.text and not m.text.startswith("/"))
+async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
+    await _run_llm_flow(message, db, settings, orchestrator, message.text or "")
+PY
