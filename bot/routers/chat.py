@@ -1,23 +1,30 @@
 # bot/routers/chat.py
-
 from __future__ import annotations
 
+import io
 import re
 import time
 from typing import Optional
 
-from aiogram import Router
-from aiogram.types import Message
+from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import Message
 
-from bot.keyboards import ikb_continue, kb_main
 from bot import texts
-from services import users as users_repo
+from bot.keyboards import ikb_continue, kb_main
+from services import continues as cont_repo
 from services import limits as limits_service
 from services import memory as memory_repo
-from services import continues as cont_repo
-from services.llm.style import update_style
+from services import users as users_repo
 from services.llm.postprocess import clean_text
+from services.llm.style import update_style
+
+# SpeechKit (STT)
+try:
+    from services.speechkit import SpeechKitError, SpeechKitSTT
+except Exception:  # чтобы не падать, если файл ещё не создан
+    SpeechKitSTT = None  # type: ignore
+    SpeechKitError = Exception  # type: ignore
 
 
 router = Router()
@@ -32,8 +39,12 @@ def _strip_tags(html: str) -> str:
     return re.sub(r"<[^>]+>", "", html)
 
 
-@router.message(lambda m: m.text and not m.text.startswith("/"))
-async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
+async def _process_user_text(message: Message, db, settings, orchestrator, user_text: str) -> None:
+    text = (user_text or "").strip()
+    if not text:
+        await message.answer("Напиши текстом или запиши голосом 🙂", reply_markup=kb_main())
+        return
+
     # ensure user exists
     u = await users_repo.get_user(db, message.from_user.id)
     if not u:
@@ -45,7 +56,7 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
         )
 
     # update style signals
-    new_style = update_style(u.style, message.text or "")
+    new_style = update_style(u.style, text)
     await users_repo.set_style(db, u.user_id, new_style)
     u.style = new_style
 
@@ -71,7 +82,7 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
     assert u is not None
 
     # remember user msg
-    await memory_repo.add(db, u.user_id, "user", clean_text(message.text or "")[:4000])
+    await memory_repo.add(db, u.user_id, "user", clean_text(text)[:4000])
 
     # loader message
     loading = await message.answer("⌛ <i>Думаю над ответом…</i>", reply_markup=kb_main())
@@ -79,7 +90,7 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
     last_edit = 0.0
     can_edit = True
 
-    async def safe_edit(text: str, reply_markup=None) -> bool:
+    async def safe_edit(html: str, reply_markup=None) -> bool:
         """
         Единая точка редактирования loader-сообщения.
         Если Telegram запретил редактировать — больше не пытаемся, уходим в fallback.
@@ -88,10 +99,9 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
         if not can_edit:
             return False
         try:
-            await loading.edit_text(text, reply_markup=reply_markup)
+            await loading.edit_text(html, reply_markup=reply_markup)
             return True
         except TelegramBadRequest as e:
-            # Отключаем дальнейшие правки только если реально "нельзя редактировать"
             msg = str(e)
             if ("message can't be edited" in msg) or ("message to edit not found" in msg):
                 can_edit = False
@@ -113,17 +123,16 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
             u.user_id,
             u.mode,
             u.style,
-            message.text or "",
+            text,
             on_delta=on_delta,
         )
     except Exception:
-        # если edit уже нельзя — просто шлём отдельным сообщением
         if not await safe_edit(texts.GENERIC_ERROR, reply_markup=None):
             await message.answer(texts.GENERIC_ERROR, reply_markup=kb_main())
         return
 
     # medical disclaimer (pro)
-    if u.mode == "pro" and _MEDICAL_RE.search(message.text or ""):
+    if u.mode == "pro" and _MEDICAL_RE.search(text):
         html_out = texts.MEDICAL_DISCLAIMER + "\n\n" + html_out
 
     parts = orchestrator.split_for_telegram(html_out)
@@ -140,3 +149,56 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
 
     # store assistant memory (plain)
     await memory_repo.add(db, u.user_id, "assistant", _strip_tags(parts[0])[:4000])
+
+
+@router.message(F.voice)
+async def chat_voice(message: Message, db, settings, orchestrator, cryptopay=None):
+    # защита от падений если конфиг/сервис ещё не добавлены
+    enable_voice = bool(getattr(settings, "enable_voice", False))
+    if not enable_voice or SpeechKitSTT is None:
+        await message.answer("🎙️ Голосовые сейчас отключены.", reply_markup=kb_main())
+        return
+
+    api_key = getattr(settings, "speechkit_api_key", "") or ""
+    iam_token = getattr(settings, "speechkit_iam_token", "") or ""
+    folder_id = getattr(settings, "speechkit_folder_id", "") or ""
+    lang = getattr(settings, "speechkit_lang", "ru-RU") or "ru-RU"
+    topic = getattr(settings, "speechkit_topic", "general") or "general"
+
+    stt = SpeechKitSTT(
+        api_key=api_key,
+        iam_token=iam_token,
+        folder_id=folder_id,
+        lang=lang,
+        topic=topic,
+    )
+
+    if not stt.is_enabled():
+        await message.answer("🎙️ SpeechKit не настроен (нет ключа/токена).", reply_markup=kb_main())
+        return
+
+    # скачать voice из Telegram (ogg/opus)
+    buf = io.BytesIO()
+    await message.bot.download(message.voice, destination=buf)
+    audio_bytes = buf.getvalue()
+
+    try:
+        recognized = await stt.recognize_oggopus(audio_bytes)
+    except SpeechKitError as e:
+        await message.answer(f"🎙️ Не смог распознать голос: {e}", reply_markup=kb_main())
+        return
+    except Exception:
+        await message.answer("🎙️ Ошибка распознавания. Попробуй ещё раз короче/чётче.", reply_markup=kb_main())
+        return
+
+    recognized = (recognized or "").strip()
+    if not recognized:
+        await message.answer("🎙️ Ничего не расслышал. Скажи чуть громче/короче 🙂", reply_markup=kb_main())
+        return
+
+    await _process_user_text(message, db, settings, orchestrator, recognized)
+
+
+@router.message(lambda m: m.text and not m.text.startswith("/"))
+async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
+    await _process_user_text(message, db, settings, orchestrator, message.text or "")
