@@ -1,4 +1,3 @@
-# bot/config.py
 from __future__ import annotations
 
 from typing import Any
@@ -8,7 +7,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # даже если в .env есть лишние ключи — не падаем
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -20,10 +18,11 @@ class Settings(BaseSettings):
     bot_token: str = Field(alias="BOT_TOKEN")
     bot_username: str = Field(alias="BOT_USERNAME")
 
-    # Timezone
+    # Logs / Time
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     timezone: str = Field(default="Europe/Moscow", alias="TIMEZONE")
 
-    # Admins (через .env: ADMIN_USER_IDS=123,456)
+    # Admins (.env: ADMIN_USER_IDS=123,456)
     admin_user_ids: list[int] = Field(default_factory=list, alias="ADMIN_USER_IDS")
 
     @field_validator("admin_user_ids", mode="before")
@@ -56,10 +55,10 @@ class Settings(BaseSettings):
     perplexity_base_url: str = Field(default="https://api.perplexity.ai", alias="PERPLEXITY_BASE_URL")
     perplexity_model: str = Field(default="sonar-pro", alias="PERPLEXITY_MODEL")
 
-    # LLM switches
+    # Feature flags for orchestrator
     enable_pro_research: bool = Field(default=True, alias="ENABLE_PRO_RESEARCH")
     enable_formatter_pass: bool = Field(default=True, alias="ENABLE_FORMATTER_PASS")
-    max_context_messages: int = Field(default=16, alias="MAX_CONTEXT_MESSAGES")
+    max_context_messages: int = Field(default=20, alias="MAX_CONTEXT_MESSAGES")
 
     # Crypto Pay (CryptoBot)
     cryptopay_api_token: str = Field(default="", alias="CRYPTOPAY_API_TOKEN")
@@ -75,6 +74,12 @@ class Settings(BaseSettings):
     web_server_host: str = Field(default="0.0.0.0", alias="WEB_SERVER_HOST")
     web_server_port: int = Field(default=8080, alias="WEB_SERVER_PORT")
 
+    # Scheduler times
+    checkin_hour: int = Field(default=22, alias="CHECKIN_HOUR")
+    checkin_minute: int = Field(default=0, alias="CHECKIN_MINUTE")
+    fact_hour: int = Field(default=10, alias="FACT_HOUR")
+    fact_minute: int = Field(default=0, alias="FACT_MINUTE")
+
     # Limits / Plans
     basic_trial_limit: int = Field(default=10, alias="BASIC_TRIAL_LIMIT")
     premium_daily_limit: int = Field(default=100, alias="PREMIUM_DAILY_LIMIT")
@@ -84,19 +89,10 @@ class Settings(BaseSettings):
     price_3m: float = Field(default=20.99, alias="PRICE_3M")
     price_12m: float = Field(default=59.99, alias="PRICE_12M")
 
-    # Schedulers
-    checkin_hour: int = Field(default=22, alias="CHECKIN_HOUR")
-    checkin_minute: int = Field(default=0, alias="CHECKIN_MINUTE")
-    fact_hour: int = Field(default=10, alias="FACT_HOUR")
-    fact_minute: int = Field(default=0, alias="FACT_MINUTE")
-
-    # Voice / Yandex SpeechKit
-    enable_voice: bool = Field(default=False, alias="ENABLE_VOICE")
+    # ===== Yandex SpeechKit (STT) =====
     speechkit_api_key: str = Field(default="", alias="SPEECHKIT_API_KEY")
     speechkit_iam_token: str = Field(default="", alias="SPEECHKIT_IAM_TOKEN")
     speechkit_folder_id: str = Field(default="", alias="SPEECHKIT_FOLDER_ID")
     speechkit_lang: str = Field(default="ru-RU", alias="SPEECHKIT_LANG")
     speechkit_topic: str = Field(default="general", alias="SPEECHKIT_TOPIC")
-
-    # Logging
-    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    speechkit_timeout_sec: int = Field(default=25, alias="SPEECHKIT_TIMEOUT_SEC")
