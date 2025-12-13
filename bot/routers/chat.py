@@ -81,8 +81,8 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
 
     async def safe_edit(text: str, reply_markup=None) -> bool:
         """
-        Пытаемся отредактировать loader.
-        Если Telegram запретил — больше не редактируем, уходим в fallback.
+        Единая точка редактирования loader-сообщения.
+        Если Telegram запретил редактировать — больше не пытаемся, уходим в fallback.
         """
         nonlocal can_edit
         if not can_edit:
@@ -90,8 +90,11 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
         try:
             await loading.edit_text(text, reply_markup=reply_markup)
             return True
-        except TelegramBadRequest:
-            can_edit = False
+        except TelegramBadRequest as e:
+            # Отключаем дальнейшие правки только если реально "нельзя редактировать"
+            msg = str(e)
+            if ("message can't be edited" in msg) or ("message to edit not found" in msg):
+                can_edit = False
             return False
         except Exception:
             return False
@@ -115,7 +118,7 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
         )
     except Exception:
         # если edit уже нельзя — просто шлём отдельным сообщением
-        if not await safe_edit(texts.GENERIC_ERROR):
+        if not await safe_edit(texts.GENERIC_ERROR, reply_markup=None):
             await message.answer(texts.GENERIC_ERROR, reply_markup=kb_main())
         return
 
