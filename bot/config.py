@@ -56,9 +56,10 @@ class Settings(BaseSettings):
       - settings.checkin_hour/checkin_minute, fact_hour/fact_minute
     """
 
+    # "utf-8-sig" quietly handles BOM (often appears if .env was edited on Windows).
     model_config = SettingsConfigDict(
         env_file=".env",
-        env_file_encoding="utf-8",
+        env_file_encoding="utf-8-sig",
         extra="ignore",
         case_sensitive=False,
     )
