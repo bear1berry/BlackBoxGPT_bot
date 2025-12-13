@@ -1,14 +1,14 @@
 [Unit]
-Description=BlackBoxGPT Telegram Bot
+Description=BlackBoxGPT Telegram Bot (%i)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=bear1berry
-WorkingDirectory=/home/bear1berry/BlackBoxGPT_bot
-EnvironmentFile=/home/bear1berry/BlackBoxGPT_bot/.env
-ExecStart=/home/bear1berry/BlackBoxGPT_bot/venv/bin/python -m bot.main
+User=%i
+WorkingDirectory=/home/%i/BlackBoxGPT_bot
+EnvironmentFile=/home/%i/BlackBoxGPT_bot/.env
+ExecStart=/home/%i/BlackBoxGPT_bot/venv/bin/python -m bot.main
 Restart=always
 RestartSec=3
 TimeoutStopSec=10

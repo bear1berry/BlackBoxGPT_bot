@@ -20,6 +20,19 @@ from services.voice import SpeechkitError, speech_to_text_oggopus
 
 router = Router()
 
+
+def _safe_is_admin(settings, user_id: int) -> bool:
+    fn = getattr(settings, "is_admin", None)
+    if callable(fn):
+        try:
+            return bool(fn(user_id))
+        except Exception:
+            pass
+    admin_ids = getattr(settings, "admin_user_ids", None) or []
+    try:
+        return int(user_id) in set(int(x) for x in admin_ids)
+    except Exception:
+        return False
 _MEDICAL_RE = re.compile(
     r"\b(болит|боль|температур|кашел|насморк|давлен|пульс|тошнит|рвот|понос|диаре|сыпь|аллерг|анализ|симптом|врач|лекарств|таблет|антибиот|дозировк|мг|ml|мл)\b",
     re.IGNORECASE,
@@ -52,7 +65,7 @@ async def _run_llm_flow(message: Message, db, settings, orchestrator, user_text:
     u = await _ensure_user(db, settings, message.from_user.id)
 
     # admin flag (♾)
-    is_admin = settings.is_admin(u.user_id)
+    is_admin = _safe_is_admin(settings, u.user_id)
 
     # update style signals
     new_style = update_style(u.style, user_text)
@@ -182,7 +195,7 @@ async def chat_voice(message: Message, db, settings, orchestrator, cryptopay=Non
         return
 
     u = await _ensure_user(db, settings, message.from_user.id)
-    is_admin = settings.is_admin(u.user_id)
+    is_admin = _safe_is_admin(settings, u.user_id)
 
     # экономим SpeechKit, если лимиты уже выбиты
     res = await limits_service.peek(
