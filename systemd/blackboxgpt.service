@@ -1,20 +1,22 @@
 [Unit]
-Description=BlackBoxGPT Telegram Bot
+Description=BlackBoxGPT bot
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
+# Поставь нужного пользователя: ubuntu / bear1berry
 User=ubuntu
-WorkingDirectory=/home/ubuntu/BlackBoxGPT_bot
-EnvironmentFile=/home/ubuntu/BlackBoxGPT_bot/.env
-ExecStart=/home/ubuntu/BlackBoxGPT_bot/venv/bin/python -m bot.main
-Restart=always
-RestartSec=3
+WorkingDirectory=%h/BlackBoxGPT_bot
+EnvironmentFile=%h/BlackBoxGPT_bot/.env
+ExecStart=%h/BlackBoxGPT_bot/venv/bin/python -m bot.main
 
-# Hardening (optional)
-NoNewPrivileges=true
-PrivateTmp=true
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
 
 [Install]
 WantedBy=multi-user.target
