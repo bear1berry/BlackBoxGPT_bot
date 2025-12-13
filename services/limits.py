@@ -1,3 +1,4 @@
+cat > services/limits.py <<'PY'
 from __future__ import annotations
 
 import time
@@ -43,26 +44,21 @@ async def peek(
     premium_daily_limit: int,
     is_admin: bool = False,
 ) -> LimitResult:
-    """
-    Проверка лимитов БЕЗ списания.
-    Удобно для дорогих операций (например, SpeechKit STT),
-    чтобы не тратить деньги, если пользователь уже упёрся в лимит.
-    """
+    # 👑 Админ — всегда ок
     if is_admin:
         return LimitResult(ok=True, reason=None)
 
     u = await ensure_plan_fresh(db, user_id)
-    now = int(time.time())
 
-    # premium daily limit
-    if u.plan == "premium" and u.premium_until > now:
+    # premium daily
+    if u.plan == "premium" and u.premium_until > int(time.time()):
         t = today_str(timezone)
-        daily_used = 0 if u.daily_date != t else u.daily_used
-        if daily_used >= premium_daily_limit:
+        used_today = u.daily_used if u.daily_date == t else 0
+        if used_today >= premium_daily_limit:
             return LimitResult(ok=False, reason="daily")
         return LimitResult(ok=True, reason=None)
 
-    # basic trial limit (total cap)
+    # basic trial cap
     if u.trial_used >= basic_trial_limit:
         return LimitResult(ok=False, reason="trial")
 
@@ -78,18 +74,13 @@ async def consume(
     premium_daily_limit: int,
     is_admin: bool = False,
 ) -> LimitResult:
-    """
-    Списывает лимит.
-    """
+    # 👑 Админ — безлимит и НЕ тратим лимиты
     if is_admin:
-        # Админ тестирует продукт — лимиты не режем.
         return LimitResult(ok=True, reason=None)
 
     u = await ensure_plan_fresh(db, user_id)
-    now = int(time.time())
 
-    # premium daily limit
-    if u.plan == "premium" and u.premium_until > now:
+    if u.plan == "premium" and u.premium_until > int(time.time()):
         t = today_str(timezone)
         if u.daily_date != t:
             await users_repo.set_daily_usage(db, user_id, daily_used=0, daily_date=t)
@@ -108,3 +99,4 @@ async def consume(
 
     await users_repo.bump_trial_used(db, user_id, 1)
     return LimitResult(ok=True, reason=None)
+PY
