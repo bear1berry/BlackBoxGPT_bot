@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Optional
 
 from aiogram import Router
 from aiogram.types import Message
@@ -16,7 +15,6 @@ from services import memory as memory_repo
 from services import continues as cont_repo
 from services.llm.style import update_style
 from services.llm.postprocess import clean_text
-
 
 router = Router()
 
@@ -32,19 +30,14 @@ def _strip_tags(html: str) -> str:
 
 @router.message(lambda m: m.text and not m.text.startswith("/"))
 async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
-    # используешь db/settings/orchestrator напрямую
-
-    # ensure user exists
     u = await users_repo.get_user(db, message.from_user.id)
     if not u:
         u = await users_repo.ensure_user(db, message.from_user.id, referrer_id=None, ref_salt=settings.bot_token[:16])
 
-    # update style signals
     new_style = update_style(u.style, message.text or "")
     await users_repo.set_style(db, u.user_id, new_style)
     u.style = new_style
 
-    # limits
     res = await limits_service.consume(
         db,
         u.user_id,
@@ -61,16 +54,12 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
             await message.answer(texts.DAILY_LIMIT_REACHED, reply_markup=kb_main())
             return
 
-    # refresh user after usage update
     u = await users_repo.get_user(db, u.user_id)
     assert u is not None
 
-    # remember user msg
     await memory_repo.add(db, u.user_id, "user", clean_text(message.text or "")[:4000])
 
-    # loader message
     loading = await message.answer("⌛ <i>Думаю над ответом…</i>", reply_markup=kb_main())
-
     last_edit = 0.0
 
     async def on_delta(preview_html_escaped: str) -> None:
@@ -99,7 +88,6 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
         await loading.edit_text(texts.GENERIC_ERROR)
         return
 
-    # medical disclaimer (pro)
     if u.mode == "pro" and _MEDICAL_RE.search(message.text or ""):
         html_out = texts.MEDICAL_DISCLAIMER + "\n\n" + html_out
 
@@ -111,5 +99,4 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
         state = await cont_repo.create(db, u.user_id, parts)
         await loading.edit_text(parts[0], reply_markup=ikb_continue(state.token))
 
-    # store assistant memory (plain)
     await memory_repo.add(db, u.user_id, "assistant", _strip_tags(parts[0])[:4000])
