@@ -34,6 +34,41 @@ async def ensure_plan_fresh(db: aiosqlite.Connection, user_id: int) -> users_rep
     return u
 
 
+async def peek(
+    db: aiosqlite.Connection,
+    user_id: int,
+    *,
+    timezone: str,
+    basic_trial_limit: int,
+    premium_daily_limit: int,
+    is_admin: bool = False,
+) -> LimitResult:
+    """
+    Проверка лимитов БЕЗ списания.
+    Удобно для дорогих операций (например, SpeechKit STT),
+    чтобы не тратить деньги, если пользователь уже упёрся в лимит.
+    """
+    if is_admin:
+        return LimitResult(ok=True, reason=None)
+
+    u = await ensure_plan_fresh(db, user_id)
+    now = int(time.time())
+
+    # premium daily limit
+    if u.plan == "premium" and u.premium_until > now:
+        t = today_str(timezone)
+        daily_used = 0 if u.daily_date != t else u.daily_used
+        if daily_used >= premium_daily_limit:
+            return LimitResult(ok=False, reason="daily")
+        return LimitResult(ok=True, reason=None)
+
+    # basic trial limit (total cap)
+    if u.trial_used >= basic_trial_limit:
+        return LimitResult(ok=False, reason="trial")
+
+    return LimitResult(ok=True, reason=None)
+
+
 async def consume(
     db: aiosqlite.Connection,
     user_id: int,
@@ -41,10 +76,20 @@ async def consume(
     timezone: str,
     basic_trial_limit: int,
     premium_daily_limit: int,
+    is_admin: bool = False,
 ) -> LimitResult:
-    u = await ensure_plan_fresh(db, user_id)
+    """
+    Списывает лимит.
+    """
+    if is_admin:
+        # Админ тестирует продукт — лимиты не режем.
+        return LimitResult(ok=True, reason=None)
 
-    if u.plan == "premium" and u.premium_until > int(time.time()):
+    u = await ensure_plan_fresh(db, user_id)
+    now = int(time.time())
+
+    # premium daily limit
+    if u.plan == "premium" and u.premium_until > now:
         t = today_str(timezone)
         if u.daily_date != t:
             await users_repo.set_daily_usage(db, user_id, daily_used=0, daily_date=t)
