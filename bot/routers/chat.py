@@ -1,4 +1,4 @@
-# bot/routers/chat.py
+cat > bot/routers/chat.py <<'PY'
 from __future__ import annotations
 
 import io
@@ -47,6 +47,9 @@ async def _run_llm_flow(message: Message, db, settings, orchestrator, user_text:
     # ensure user exists
     u = await _ensure_user(db, settings, message.from_user.id)
 
+    # admin flag (♾)
+    is_admin = settings.is_admin(u.user_id)
+
     # update style signals
     new_style = update_style(u.style, user_text)
     await users_repo.set_style(db, u.user_id, new_style)
@@ -59,6 +62,7 @@ async def _run_llm_flow(message: Message, db, settings, orchestrator, user_text:
         timezone=settings.timezone,
         basic_trial_limit=settings.basic_trial_limit,
         premium_daily_limit=settings.premium_daily_limit,
+        is_admin=is_admin,
     )
     if not res.ok:
         if res.reason == "trial":
@@ -148,17 +152,19 @@ async def chat_voice(message: Message, db, settings, orchestrator, cryptopay=Non
         await message.answer("🎙️ Голосовые сейчас выключены.", reply_markup=kb_main())
         return
 
-    # экономим SpeechKit, если лимиты уже выбиты
     u = await _ensure_user(db, settings, message.from_user.id)
-    res = await limits_service.peek(  # если peek нет — см. ниже примечание
+    is_admin = settings.is_admin(u.user_id)
+
+    # экономим SpeechKit, если лимиты уже выбиты
+    res = await limits_service.peek(
         db,
         u.user_id,
         timezone=settings.timezone,
         basic_trial_limit=settings.basic_trial_limit,
         premium_daily_limit=settings.premium_daily_limit,
+        is_admin=is_admin,
     )
     if res is not None and not res.ok:
-        # если у тебя нет peek — просто убери этот блок, и лимиты проверятся внутри _run_llm_flow
         if res.reason == "trial":
             await message.answer(texts.TRIAL_LIMIT_REACHED, reply_markup=kb_main())
             await message.answer("💎 Оформить подписку можно в «💎 Подписка».", reply_markup=kb_main())
@@ -190,7 +196,6 @@ async def chat_voice(message: Message, db, settings, orchestrator, cryptopay=Non
         await loading.edit_text("🎙️ Ошибка обработки голосового.", reply_markup=kb_main())
         return
 
-    # убираем “временное” сообщение и запускаем обычный текстовый пайплайн
     try:
         await loading.delete()
     except Exception:
@@ -209,3 +214,4 @@ async def chat_voice(message: Message, db, settings, orchestrator, cryptopay=Non
 @router.message(lambda m: m.text and not m.text.startswith("/"))
 async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
     await _run_llm_flow(message, db, settings, orchestrator, message.text or "")
+PY
