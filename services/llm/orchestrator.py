@@ -48,63 +48,8 @@ def _needs_web(text: str) -> bool:
 
 
 def _sanitize_telegram_html(html_text: str) -> str:
-    """Make Telegram HTML safe.
-
-    Telegram parses HTML strictly:
-    - only a small whitelist of tags is supported
-    - any stray '<' or '&' outside tags/entities breaks the whole message
-
-    We:
-    1) strip unsupported tags
-    2) normalize supported tags to the plain form (no attributes)
-    3) escape text segments outside tags while preserving existing entities
-    """
-
-    allowed = ("b", "i", "u", "code", "pre", "blockquote")
-    allowed_re = "|".join(allowed)
-
-    # 1) remove unsupported tags entirely
-    s = re.sub(rf"</?(?!({allowed_re})\b)[^>]*>", "", html_text)
-
-    # 2) normalize allowed opening tags (Telegram is picky about attributes)
-    s = re.sub(rf"<({allowed_re})\b[^>]*>", r"<\1>", s)
-
-    # 3) escape text outside tags, but keep entities like &amp; intact
-    tag_split = re.compile(rf"(</?(?:{allowed_re})>)", re.IGNORECASE)
-    entity_re = re.compile(r"&(#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);")
-
-    def escape_text_preserving_entities(text: str) -> str:
-        # Escape < and > always
-        text = text.replace("<", "&lt;").replace(">", "&gt;")
-
-        # Escape & only when it is NOT part of an entity
-        out = []
-        i = 0
-        while i < len(text):
-            if text[i] == "&":
-                m = entity_re.match(text, i)
-                if m:
-                    out.append(m.group(0))
-                    i = m.end()
-                    continue
-                out.append("&amp;")
-                i += 1
-                continue
-            out.append(text[i])
-            i += 1
-        return "".join(out)
-
-    chunks = tag_split.split(s)
-    safe: list[str] = []
-    for ch in chunks:
-        if not ch:
-            continue
-        if tag_split.fullmatch(ch):
-            safe.append(ch.lower())
-        else:
-            safe.append(escape_text_preserving_entities(ch))
-
-    return "".join(safe)
+    allowed = r"b|i|u|code|pre|blockquote"
+    return re.sub(rf"<(?!/?(?:{allowed})\b)[^>]*>", "", html_text)
 
 
 @dataclass

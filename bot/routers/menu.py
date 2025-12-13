@@ -35,40 +35,6 @@ from services import users as users_repo
 router = Router()
 
 
-
-def _safe_is_admin(settings, user_id: int) -> bool:
-    fn = getattr(settings, "is_admin", None)
-    if callable(fn):
-        try:
-            return bool(fn(user_id))
-        except Exception:
-            pass
-    admin_ids = getattr(settings, "admin_user_ids", None) or []
-    try:
-        return int(user_id) in set(int(x) for x in admin_ids)
-    except Exception:
-        return False
-
-
-def _safe_price(settings, attr: str, default: float = 0.0) -> float:
-    val = getattr(settings, attr, None)
-    if isinstance(val, (int, float)):
-        return float(val)
-
-    # optional fallback: plan_prices dict (keys: 1m/3m/12m)
-    plan_prices = getattr(settings, "plan_prices", None)
-    if isinstance(plan_prices, dict):
-        mapping = {"price_1m": "1m", "price_3m": "3m", "price_12m": "12m"}
-        key = mapping.get(attr, attr)
-        v = plan_prices.get(key)
-        if isinstance(v, (int, float)):
-            return float(v)
-        if isinstance(v, str):
-            try:
-                return float(v)
-            except Exception:
-                pass
-    return float(default)
 def _fmt_date(ts: int, tz: str) -> str:
     if ts <= 0:
         return "—"
@@ -91,7 +57,7 @@ async def open_profile(message: Message, db, settings) -> None:
     # актуализируем план (автодаунгрейд премиума по времени)
     u = await limits_service.ensure_plan_fresh(db, message.from_user.id)
 
-    is_admin = _safe_is_admin(settings, message.from_user.id)
+    is_admin = settings.is_admin(message.from_user.id)
     ref_link = f"https://t.me/{settings.bot_username}?start={u.ref_code}"
 
     # режим
@@ -148,9 +114,9 @@ async def open_referrals(message: Message, db, settings) -> None:
 @router.message(lambda m: m.text == BTN_SUBSCRIPTION)
 async def open_subscription(message: Message, settings) -> None:
     txt = texts.SUBSCRIPTION_MENU_TEXT.format(
-        price_1m=f"{_safe_price(settings, 'price_1m'):.2f}",
-        price_3m=f"{_safe_price(settings, 'price_3m'):.2f}",
-        price_12m=f"{_safe_price(settings, 'price_12m'):.2f}",
+        price_1m=f"{settings.price_1m:.2f}",
+        price_3m=f"{settings.price_3m:.2f}",
+        price_12m=f"{settings.price_12m:.2f}",
     )
     await message.answer(txt, reply_markup=kb_subscription())
 

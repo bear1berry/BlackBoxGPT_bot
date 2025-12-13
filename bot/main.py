@@ -137,12 +137,6 @@ async def main() -> None:
         with suppress(Exception):
             await bot.session.close()
         with suppress(Exception):
-            await cryptopay.aclose()
-        with suppress(Exception):
-            await deepseek.aclose()
-        with suppress(Exception):
-            await perplexity.aclose()
-        with suppress(Exception):
             await db.close()
 
 

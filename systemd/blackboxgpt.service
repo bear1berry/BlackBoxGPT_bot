@@ -5,15 +5,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=bear1berry
-WorkingDirectory=/home/bear1berry/BlackBoxGPT_bot
-EnvironmentFile=/home/bear1berry/BlackBoxGPT_bot/.env
-ExecStart=/home/bear1berry/BlackBoxGPT_bot/venv/bin/python -m bot.main
+User=ubuntu
+WorkingDirectory=/home/ubuntu/BlackBoxGPT_bot
+EnvironmentFile=/home/ubuntu/BlackBoxGPT_bot/.env
+ExecStart=/home/ubuntu/BlackBoxGPT_bot/venv/bin/python -m bot.main
 Restart=always
 RestartSec=3
-TimeoutStopSec=10
-KillSignal=SIGINT
-SyslogIdentifier=blackboxgpt
+
+# Hardening (optional)
 NoNewPrivileges=true
 PrivateTmp=true
 

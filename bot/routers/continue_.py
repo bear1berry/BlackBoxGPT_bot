@@ -7,17 +7,6 @@ from aiogram.exceptions import TelegramBadRequest
 from bot.keyboards import ikb_continue
 from services import continues as cont_repo
 
-
-def _strip_tags(html: str) -> str:
-    import re
-
-    return re.sub(r"<[^>]+>", "", html)
-
-
-def _is_parse_error(err: Exception) -> bool:
-    msg = str(err)
-    return "can't parse entities" in msg or "Can't parse entities" in msg
-
 router = Router()
 
 
@@ -59,21 +48,9 @@ async def cont(cb: CallbackQuery, db) -> None:
         pass
 
     if next_idx == len(st.parts) - 1:
-        try:
-            await cb.message.answer(text)
-        except TelegramBadRequest as e:
-            if _is_parse_error(e):
-                await cb.message.answer(_strip_tags(text), parse_mode=None)
-            else:
-                raise
+        await cb.message.answer(text)
         await cont_repo.delete(db, token)
     else:
-        try:
-            await cb.message.answer(text, reply_markup=ikb_continue(token))
-        except TelegramBadRequest as e:
-            if _is_parse_error(e):
-                await cb.message.answer(_strip_tags(text), reply_markup=ikb_continue(token), parse_mode=None)
-            else:
-                raise
+        await cb.message.answer(text, reply_markup=ikb_continue(token))
 
     await cb.answer()

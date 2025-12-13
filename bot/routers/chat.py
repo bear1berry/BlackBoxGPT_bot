@@ -20,19 +20,6 @@ from services.voice import SpeechkitError, speech_to_text_oggopus
 
 router = Router()
 
-
-def _safe_is_admin(settings, user_id: int) -> bool:
-    fn = getattr(settings, "is_admin", None)
-    if callable(fn):
-        try:
-            return bool(fn(user_id))
-        except Exception:
-            pass
-    admin_ids = getattr(settings, "admin_user_ids", None) or []
-    try:
-        return int(user_id) in set(int(x) for x in admin_ids)
-    except Exception:
-        return False
 _MEDICAL_RE = re.compile(
     r"\b(болит|боль|температур|кашел|насморк|давлен|пульс|тошнит|рвот|понос|диаре|сыпь|аллерг|анализ|симптом|врач|лекарств|таблет|антибиот|дозировк|мг|ml|мл)\b",
     re.IGNORECASE,
@@ -41,11 +28,6 @@ _MEDICAL_RE = re.compile(
 
 def _strip_tags(html: str) -> str:
     return re.sub(r"<[^>]+>", "", html)
-
-
-def _is_parse_error(err: Exception) -> bool:
-    msg = str(err)
-    return "can't parse entities" in msg or "Can't parse entities" in msg
 
 
 async def _ensure_user(db, settings, user_id: int):
@@ -65,7 +47,7 @@ async def _run_llm_flow(message: Message, db, settings, orchestrator, user_text:
     u = await _ensure_user(db, settings, message.from_user.id)
 
     # admin flag (♾)
-    is_admin = _safe_is_admin(settings, u.user_id)
+    is_admin = settings.is_admin(u.user_id)
 
     # update style signals
     new_style = update_style(u.style, user_text)
@@ -101,14 +83,7 @@ async def _run_llm_flow(message: Message, db, settings, orchestrator, user_text:
     loading_text = "⌛ <i>Думаю над ответом…</i>"
     if preface:
         loading_text = preface + "\n" + loading_text
-    # Always send loader safely (rarely, Telegram can reject HTML)
-    try:
-        loading = await message.answer(loading_text, reply_markup=kb_main())
-    except TelegramBadRequest as e:
-        if _is_parse_error(e):
-            loading = await message.answer(_strip_tags(loading_text), reply_markup=kb_main(), parse_mode=None)
-        else:
-            raise
+    loading = await message.answer(loading_text, reply_markup=kb_main())
 
     last_edit = 0.0
     can_edit = True
@@ -122,12 +97,6 @@ async def _run_llm_flow(message: Message, db, settings, orchestrator, user_text:
             return True
         except TelegramBadRequest as e:
             msg = str(e)
-            if _is_parse_error(e):
-                try:
-                    await loading.edit_text(_strip_tags(text), reply_markup=reply_markup, parse_mode=None)
-                    return True
-                except Exception:
-                    return False
             if ("message can't be edited" in msg) or ("message to edit not found" in msg):
                 can_edit = False
             return False
@@ -165,24 +134,12 @@ async def _run_llm_flow(message: Message, db, settings, orchestrator, user_text:
     if len(parts) == 1:
         ok = await safe_edit(parts[0], reply_markup=None)
         if not ok:
-            try:
-                await message.answer(parts[0])
-            except TelegramBadRequest as e:
-                if _is_parse_error(e):
-                    await message.answer(_strip_tags(parts[0]), parse_mode=None)
-                else:
-                    raise
+            await message.answer(parts[0])
     else:
         state = await cont_repo.create(db, u.user_id, parts)
         ok = await safe_edit(parts[0], reply_markup=ikb_continue(state.token))
         if not ok:
-            try:
-                await message.answer(parts[0], reply_markup=ikb_continue(state.token))
-            except TelegramBadRequest as e:
-                if _is_parse_error(e):
-                    await message.answer(_strip_tags(parts[0]), reply_markup=ikb_continue(state.token), parse_mode=None)
-                else:
-                    raise
+            await message.answer(parts[0], reply_markup=ikb_continue(state.token))
 
     # store assistant memory (plain)
     await memory_repo.add(db, u.user_id, "assistant", _strip_tags(parts[0])[:4000])
@@ -195,7 +152,7 @@ async def chat_voice(message: Message, db, settings, orchestrator, cryptopay=Non
         return
 
     u = await _ensure_user(db, settings, message.from_user.id)
-    is_admin = _safe_is_admin(settings, u.user_id)
+    is_admin = settings.is_admin(u.user_id)
 
     # экономим SpeechKit, если лимиты уже выбиты
     res = await limits_service.peek(
