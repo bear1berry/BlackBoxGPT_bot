@@ -112,20 +112,13 @@ async def main() -> None:
 
     # Start polling
     try:
-        await dp.start_polling(bot)
-    finally:
-        scheduler.shutdown(wait=False)
-        with suppress(Exception):
-            await web_runner.cleanup()
-        with suppress(Exception):
-            await cryptopay.aclose()
-        with suppress(Exception):
-            await deepseek.aclose()
-        with suppress(Exception):
-            await perplexity.aclose()
-        with suppress(Exception):
-            await db.close()
-
+        await dp.start_polling(
+    bot,
+    db=db,
+    settings=settings,
+    orchestrator=orchestrator,
+    cryptopay=cryptopay,
+)
 
 if __name__ == "__main__":
     with suppress(ImportError):
