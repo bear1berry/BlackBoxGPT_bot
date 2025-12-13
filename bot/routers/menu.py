@@ -56,9 +56,6 @@ async def open_modes(message: Message) -> None:
 
 @router.message(lambda m: m.text == BTN_PROFILE)
 async def open_profile(message: Message) -> None:
-    bot = message.bot
-    db = bot["db"]
-    settings = bot["settings"]
 
     u = await limits_service.ensure_plan_fresh(db, message.from_user.id)
     ref_link = f"https://t.me/{settings.bot_username}?start={u.ref_code}"
@@ -85,9 +82,6 @@ async def open_profile(message: Message) -> None:
 
 @router.message(lambda m: m.text == BTN_REFERRALS)
 async def open_referrals(message: Message) -> None:
-    bot = message.bot
-    db = bot["db"]
-    settings = bot["settings"]
 
     u = await users_repo.get_user(db, message.from_user.id)
     if not u:
@@ -114,10 +108,6 @@ async def open_subscription(message: Message) -> None:
 
 @router.message(lambda m: m.text in (BTN_SUB_1M, BTN_SUB_3M, BTN_SUB_12M))
 async def create_invoice(message: Message) -> None:
-    bot = message.bot
-    db = bot["db"]
-    settings = bot["settings"]
-    cryptopay = bot["cryptopay"]
 
     months = 1 if message.text == BTN_SUB_1M else 3 if message.text == BTN_SUB_3M else 12
     amount = settings.price_1m if months == 1 else settings.price_3m if months == 3 else settings.price_12m
