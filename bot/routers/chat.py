@@ -6,7 +6,7 @@ import re
 import time
 from html import escape as html_escape
 
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.exceptions import TelegramBadRequest
 
@@ -34,9 +34,6 @@ def _strip_tags(html: str) -> str:
 
 
 async def _download_telegram_file_as_bytes(message: Message, file_id: str) -> bytes:
-    """
-    Скачиваем файл из Telegram в память (Bytes).
-    """
     bot = message.bot
     tg_file = await bot.get_file(file_id)
     buf = io.BytesIO()
@@ -60,31 +57,34 @@ async def _process_user_text(message: Message, db, settings, orchestrator, user_
         await message.answer("Не вижу текста. Попробуй ещё раз 🙂", reply_markup=kb_main())
         return
 
+    is_admin = bool(getattr(settings, "is_admin", lambda _x: False)(u.user_id))
+
     # update style signals
     new_style = update_style(u.style, user_text)
     await users_repo.set_style(db, u.user_id, new_style)
     u.style = new_style
 
-    # limits
-    res = await limits_service.consume(
-        db,
-        u.user_id,
-        timezone=settings.timezone,
-        basic_trial_limit=settings.basic_trial_limit,
-        premium_daily_limit=settings.premium_daily_limit,
-    )
-    if not res.ok:
-        if res.reason == "trial":
-            await message.answer(texts.TRIAL_LIMIT_REACHED, reply_markup=kb_main())
-            await message.answer("💎 Оформить подписку можно в «💎 Подписка».", reply_markup=kb_main())
-            return
-        if res.reason == "daily":
-            await message.answer(texts.DAILY_LIMIT_REACHED, reply_markup=kb_main())
-            return
+    # limits (админов не режем)
+    if not is_admin:
+        res = await limits_service.consume(
+            db,
+            u.user_id,
+            timezone=settings.timezone,
+            basic_trial_limit=settings.basic_trial_limit,
+            premium_daily_limit=settings.premium_daily_limit,
+        )
+        if not res.ok:
+            if res.reason == "trial":
+                await message.answer(texts.TRIAL_LIMIT_REACHED, reply_markup=kb_main())
+                await message.answer("💎 Оформить подписку можно в «💎 Подписка».", reply_markup=kb_main())
+                return
+            if res.reason == "daily":
+                await message.answer(texts.DAILY_LIMIT_REACHED, reply_markup=kb_main())
+                return
 
-    # refresh user after usage update
-    u = await users_repo.get_user(db, u.user_id)
-    assert u is not None
+        # refresh user after usage update
+        u = await users_repo.get_user(db, u.user_id)
+        assert u is not None
 
     # remember user msg
     await memory_repo.add(db, u.user_id, "user", user_text[:4000])
@@ -132,7 +132,6 @@ async def _process_user_text(message: Message, db, settings, orchestrator, user_
             await message.answer(texts.GENERIC_ERROR, reply_markup=kb_main())
         return
 
-    # medical disclaimer (pro)
     if u.mode == "pro" and _MEDICAL_RE.search(user_text):
         html_out = texts.MEDICAL_DISCLAIMER + "\n\n" + html_out
 
@@ -148,13 +147,11 @@ async def _process_user_text(message: Message, db, settings, orchestrator, user_
         if not ok:
             await message.answer(parts[0], reply_markup=ikb_continue(state.token))
 
-    # store assistant memory (plain)
     await memory_repo.add(db, u.user_id, "assistant", _strip_tags(parts[0])[:4000])
 
 
-@router.message(lambda m: m.voice is not None)
+@router.message(F.voice)
 async def voice_chat(message: Message, db, settings, orchestrator, cryptopay=None):
-    # быстрый UX: сразу показываем, что приняли голос
     loading = await message.answer("🎙️ <i>Распознаю голос…</i>", reply_markup=kb_main())
 
     try:
@@ -168,17 +165,15 @@ async def voice_chat(message: Message, db, settings, orchestrator, cryptopay=Non
         await loading.edit_text("❌ Не получилось обработать голос. Попробуй ещё раз.", reply_markup=kb_main())
         return
 
-    # показываем короткий превью распознанного (чтобы ты видел, что всё ок)
     preview = html_escape(text[:220])
     await loading.edit_text(
         f"🎙️ <i>Распознано:</i> <code>{preview}</code>\n\n⌛ <i>Думаю над ответом…</i>",
         reply_markup=kb_main(),
     )
 
-    # дальше — тот же пайплайн, что и у текста
     await _process_user_text(message, db, settings, orchestrator, text)
 
 
-@router.message(lambda m: m.text and not m.text.startswith("/"))
+@router.message(F.text & ~F.text.startswith("/"))
 async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
     await _process_user_text(message, db, settings, orchestrator, message.text or "")
