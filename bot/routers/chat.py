@@ -1,7 +1,10 @@
+# bot/routers/chat.py
+
 from __future__ import annotations
 
 import re
 import time
+from typing import Optional
 
 from aiogram import Router
 from aiogram.types import Message
@@ -15,6 +18,7 @@ from services import memory as memory_repo
 from services import continues as cont_repo
 from services.llm.style import update_style
 from services.llm.postprocess import clean_text
+
 
 router = Router()
 
@@ -30,14 +34,22 @@ def _strip_tags(html: str) -> str:
 
 @router.message(lambda m: m.text and not m.text.startswith("/"))
 async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
+    # ensure user exists
     u = await users_repo.get_user(db, message.from_user.id)
     if not u:
-        u = await users_repo.ensure_user(db, message.from_user.id, referrer_id=None, ref_salt=settings.bot_token[:16])
+        u = await users_repo.ensure_user(
+            db,
+            message.from_user.id,
+            referrer_id=None,
+            ref_salt=settings.bot_token[:16],
+        )
 
+    # update style signals
     new_style = update_style(u.style, message.text or "")
     await users_repo.set_style(db, u.user_id, new_style)
     u.style = new_style
 
+    # limits
     res = await limits_service.consume(
         db,
         u.user_id,
@@ -54,13 +66,35 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
             await message.answer(texts.DAILY_LIMIT_REACHED, reply_markup=kb_main())
             return
 
+    # refresh user after usage update
     u = await users_repo.get_user(db, u.user_id)
     assert u is not None
 
+    # remember user msg
     await memory_repo.add(db, u.user_id, "user", clean_text(message.text or "")[:4000])
 
+    # loader message
     loading = await message.answer("⌛ <i>Думаю над ответом…</i>", reply_markup=kb_main())
+
     last_edit = 0.0
+    can_edit = True
+
+    async def safe_edit(text: str, reply_markup=None) -> bool:
+        """
+        Пытаемся отредактировать loader.
+        Если Telegram запретил — больше не редактируем, уходим в fallback.
+        """
+        nonlocal can_edit
+        if not can_edit:
+            return False
+        try:
+            await loading.edit_text(text, reply_markup=reply_markup)
+            return True
+        except TelegramBadRequest:
+            can_edit = False
+            return False
+        except Exception:
+            return False
 
     async def on_delta(preview_html_escaped: str) -> None:
         nonlocal last_edit
@@ -68,12 +102,7 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
         if now - last_edit < 0.9:
             return
         last_edit = now
-        try:
-            await loading.edit_text("⌛ <i>Думаю над ответом…</i>\n\n" + preview_html_escaped)
-        except TelegramBadRequest:
-            pass
-        except Exception:
-            pass
+        await safe_edit("⌛ <i>Думаю над ответом…</i>\n\n" + preview_html_escaped)
 
     try:
         html_out = await orchestrator.answer_stream(
@@ -85,18 +114,26 @@ async def chat(message: Message, db, settings, orchestrator, cryptopay=None):
             on_delta=on_delta,
         )
     except Exception:
-        await loading.edit_text(texts.GENERIC_ERROR)
+        # если edit уже нельзя — просто шлём отдельным сообщением
+        if not await safe_edit(texts.GENERIC_ERROR):
+            await message.answer(texts.GENERIC_ERROR, reply_markup=kb_main())
         return
 
+    # medical disclaimer (pro)
     if u.mode == "pro" and _MEDICAL_RE.search(message.text or ""):
         html_out = texts.MEDICAL_DISCLAIMER + "\n\n" + html_out
 
     parts = orchestrator.split_for_telegram(html_out)
 
     if len(parts) == 1:
-        await loading.edit_text(parts[0], reply_markup=None)
+        ok = await safe_edit(parts[0], reply_markup=None)
+        if not ok:
+            await message.answer(parts[0])
     else:
         state = await cont_repo.create(db, u.user_id, parts)
-        await loading.edit_text(parts[0], reply_markup=ikb_continue(state.token))
+        ok = await safe_edit(parts[0], reply_markup=ikb_continue(state.token))
+        if not ok:
+            await message.answer(parts[0], reply_markup=ikb_continue(state.token))
 
+    # store assistant memory (plain)
     await memory_repo.add(db, u.user_id, "assistant", _strip_tags(parts[0])[:4000])
